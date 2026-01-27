@@ -1,7 +1,95 @@
 {
-  "version": 1,
-  "resources": [
-    "https://llama.defirelay.com/chat"
-  ]
-
+  "x402Version": 2,
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "1000",
+      "payTo": "0xd8F98Cb5b5234E4b8dDD7eC17E6c600b08a030e0",
+      "maxTimeoutSeconds": 60,
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "extra": {}
+    }
+  ],
+  "resource": {
+    "url": "https://llama.defirelay.com/chat",
+    "description": "Pay-per-use Llama AI chat - OpenAI-compatible API endpoint",
+    "mimeType": "application/json"
+  },
+  "extensions": {
+    "bazaar": {
+      "info": {
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello, how are you?"
+            }
+          ],
+          "model": "llama-3.1-70b",
+          "temperature": 0.7,
+          "max_tokens": 1024
+        },
+        "output": {
+          "id": "chatcmpl-123",
+          "object": "chat.completion",
+          "created": 1677652288,
+          "model": "llama-3.1-70b",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "Hello! I'm doing well, thank you for asking. How can I assist you today?"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 12,
+            "completion_tokens": 18,
+            "total_tokens": 30
+          }
+        }
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "enum": ["system", "user", "assistant"]
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": ["role", "content"]
+            },
+            "minItems": 1
+          },
+          "model": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "stream": {
+            "type": "boolean"
+          }
+        },
+        "required": ["messages"]
+      }
+    }
+  }
 }

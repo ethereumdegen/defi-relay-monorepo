@@ -62,12 +62,14 @@ export function Hero() {
             </div>
             <pre className="text-slate-300 overflow-x-auto">
               <code>
-                <span className="text-slate-500"># Add dependencies to Cargo.toml</span>
-{'\n'}<span className="text-relay-400">actix-web</span> = "4"
-{'\n'}<span className="text-relay-400">reqwest</span> = {"{ version = \"0.12\", features = [\"json\"] }"}
+                <span className="text-slate-500"># x402 Payment Facilitator</span>
+{'\n'}<span className="text-relay-400">pay.defirelay.com</span>  <span className="text-slate-500"># Verifies & settles x402 payments</span>
 {'\n'}
+{'\n'}<span className="text-slate-500"># Try it out - Llama AI Agent</span>
+{'\n'}<span className="text-relay-400">llama.defirelay.com</span>  <span className="text-slate-500"># Chat with Llama, pay via x402</span>
+{'\n'}
+{'\n'}<span className="text-slate-500"># Point your x402 middleware to pay.defirelay.com</span>
 {'\n'}<span className="text-slate-500"># Users sign payments - no gas required</span>
-{'\n'}<span className="text-slate-500"># DefiRelay handles settlement on Base</span>
               </code>
             </pre>
           </div>

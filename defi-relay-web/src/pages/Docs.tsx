@@ -1,14 +1,12 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronRight, Code, Settings, Zap, Terminal, FileCode } from 'lucide-react'
+import { ChevronRight, Code, Zap, ExternalLink, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 
 const sections = [
   { id: 'getting-started', label: 'Getting Started', icon: Zap },
-  { id: 'installation', label: 'Installation', icon: Terminal },
-  { id: 'configuration', label: 'Configuration', icon: Settings },
+  { id: 'build-your-bot', label: 'Build Your Bot', icon: GitBranch },
   { id: 'api-reference', label: 'API Reference', icon: Code },
-  { id: 'examples', label: 'Examples', icon: FileCode },
 ]
 
 export function Docs() {
@@ -49,10 +47,8 @@ export function Docs() {
           {/* Main content */}
           <div className="flex-1 min-w-0">
             {activeSection === 'getting-started' && <GettingStarted />}
-            {activeSection === 'installation' && <Installation />}
-            {activeSection === 'configuration' && <Configuration />}
+            {activeSection === 'build-your-bot' && <BuildYourBot />}
             {activeSection === 'api-reference' && <APIReferenceSection />}
-            {activeSection === 'examples' && <Examples />}
           </div>
         </div>
       </div>
@@ -67,234 +63,299 @@ function GettingStarted() {
 
       <p className="text-slate-300 text-lg mb-8">
         DefiRelay is an x402 payments facilitator that handles payment verification and on-chain settlement on Base mainnet.
-        This guide will help you integrate x402 payments into your Actix Web application.
+        The easiest way to get started is to use our reference implementation.
       </p>
 
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Quick Start</h2>
-
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">1. Add dependencies to Cargo.toml</span>
-        </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`[dependencies]
-actix-web = "4"
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-reqwest = { version = "0.12", features = ["json"] }
-base64 = "0.22"
-dotenvy = "0.15"`}</code>
-        </pre>
-      </div>
-
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">2. Wrap your routes with X402 middleware</span>
-        </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`// main.rs
-use actix_web::{web, App, HttpServer};
-
-HttpServer::new(move || {
-    App::new()
-        // Public endpoints (no payment required)
-        .route("/health", web::get().to(health_handler))
-        // Protected endpoint with x402 middleware
-        .service(
-            web::scope("/api/premium")
-                .wrap(X402Middleware::new(config.clone(), facilitator.clone()))
-                .route("", web::post().to(premium_handler)),
-        )
-})
-.bind(("0.0.0.0", 8080))?
-.run()
-.await`}</code>
-        </pre>
-      </div>
-
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">3. Your API now requires payment</span>
-        </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`# Request without payment returns 402
-curl https://yourapp.com/api/premium
-# → HTTP 402 Payment Required
-
-# Request with x402 payment header succeeds
-curl -H "X-Payment: <signed-payment>" https://yourapp.com/api/premium
-# → HTTP 200 OK`}</code>
-        </pre>
+      {/* Reference Implementation Card */}
+      <div className="rounded-xl bg-gradient-to-r from-relay-500/10 to-purple-500/10 border border-relay-500/30 p-6 mb-8">
+        <h2 className="text-xl font-semibold text-white mb-3 flex items-center gap-2">
+          <GitBranch className="w-5 h-5 text-relay-400" />
+          Reference Implementation: x402-llama-bot
+        </h2>
+        <p className="text-slate-300 mb-4">
+          A complete, production-ready example of an x402-enabled service. This bot wraps a Llama AI agent
+          and charges USDC per request. Clone it, swap in your own service, and deploy.
+        </p>
+        <a
+          href="https://github.com/ethereumdegen/defi-relay-monorepo/tree/master/x402-llama-bot"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-relay-500 hover:bg-relay-600 text-white rounded-lg transition-colors"
+        >
+          View on GitHub
+          <ExternalLink className="w-4 h-4" />
+        </a>
       </div>
 
       <h2 className="text-2xl font-semibold text-white mt-10 mb-4">How It Works</h2>
 
-      <ol className="space-y-4 text-slate-300">
+      <p className="text-slate-300 mb-6">
+        The x402 protocol lets you monetize any HTTP endpoint with USDC micropayments. No accounts, no API keys - just cryptographic signatures.
+      </p>
+
+      <ol className="space-y-4 text-slate-300 mb-8">
         <li className="flex items-start gap-3">
           <span className="flex-shrink-0 w-6 h-6 rounded-full bg-relay-500 text-white text-sm font-medium flex items-center justify-center">1</span>
-          <span>User makes a request to your protected API endpoint</span>
+          <span>Client requests your protected endpoint without payment</span>
         </li>
         <li className="flex items-start gap-3">
           <span className="flex-shrink-0 w-6 h-6 rounded-full bg-relay-500 text-white text-sm font-medium flex items-center justify-center">2</span>
-          <span>If no valid payment is attached, return HTTP 402 with payment requirements</span>
+          <span>Your middleware returns <code className="bg-slate-800 px-1.5 py-0.5 rounded text-relay-400">HTTP 402</code> with payment requirements in the header</span>
         </li>
         <li className="flex items-start gap-3">
           <span className="flex-shrink-0 w-6 h-6 rounded-full bg-relay-500 text-white text-sm font-medium flex items-center justify-center">3</span>
-          <span>User signs a USDC payment with their wallet (no gas required)</span>
+          <span>Client signs a USDC payment with their wallet (gasless EIP-3009 signature)</span>
         </li>
         <li className="flex items-start gap-3">
           <span className="flex-shrink-0 w-6 h-6 rounded-full bg-relay-500 text-white text-sm font-medium flex items-center justify-center">4</span>
-          <span>DefiRelay verifies the signature and settles on Base mainnet</span>
+          <span>Client retries request with <code className="bg-slate-800 px-1.5 py-0.5 rounded text-relay-400">X-PAYMENT</code> header</span>
         </li>
         <li className="flex items-start gap-3">
           <span className="flex-shrink-0 w-6 h-6 rounded-full bg-relay-500 text-white text-sm font-medium flex items-center justify-center">5</span>
-          <span>Your API receives the request with a valid payment receipt</span>
+          <span>Middleware verifies signature, settles payment on-chain via DefiRelay, then processes the request</span>
         </li>
       </ol>
-    </section>
-  )
-}
-
-function Installation() {
-  return (
-    <section className="prose prose-invert max-w-none">
-      <h1 className="text-3xl font-bold text-white mb-6">Installation</h1>
-
-      <p className="text-slate-300 text-lg mb-8">
-        Add the required dependencies to your Rust project.
-      </p>
-
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Cargo.toml</h2>
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`[dependencies]
-actix-web = "4"
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-reqwest = { version = "0.12", features = ["json"] }
-base64 = "0.22"
-dotenvy = "0.15"
-thiserror = "2"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }`}</code>
-        </pre>
-      </div>
-
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Project Structure</h2>
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`src/
-├── main.rs           # App entry point
-├── config.rs         # Configuration from env
-├── middleware/
-│   ├── mod.rs
-│   └── x402.rs       # X402 middleware
-├── models/
-│   ├── mod.rs
-│   └── x402.rs       # Payment types
-└── services/
-    ├── mod.rs
-    └── facilitator.rs # DefiRelay client`}</code>
-        </pre>
-      </div>
-
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Requirements</h2>
-      <ul className="text-slate-300 space-y-2">
-        <li>Rust 1.70+ with Cargo</li>
-        <li>Actix Web 4.x</li>
-        <li>A wallet address to receive payments</li>
-      </ul>
-    </section>
-  )
-}
-
-function Configuration() {
-  return (
-    <section className="prose prose-invert max-w-none">
-      <h1 className="text-3xl font-bold text-white mb-6">Configuration</h1>
-
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Config Struct</h2>
 
       <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
         <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">src/config.rs</span>
+          <span className="text-slate-400 text-sm">Example Flow</span>
         </div>
         <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`use std::env;
+          <code className="text-slate-300">{`# 1. Request without payment → 402
+curl -i https://yourbot.com/chat
+# HTTP/1.1 402 Payment Required
+# payment-required: eyJ4NDAyVmVyc2lvbiI6Mix...
 
-#[derive(Clone, Debug)]
-pub struct Config {
-    pub bot_wallet_address: String,
-    pub facilitator_url: String,
-    pub port: u16,
-    pub cost_per_request: String,  // Raw USDC amount (6 decimals)
+# 2. Request with signed payment → Success
+curl -i https://yourbot.com/chat \\
+  -H "X-PAYMENT: eyJ4NDAyVmVyc2lvbiI6Mix..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"messages":[{"role":"user","content":"Hello!"}]}'
+# HTTP/1.1 200 OK`}</code>
+        </pre>
+      </div>
+
+      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Key Concepts</h2>
+
+      <div className="grid gap-4">
+        <div className="rounded-lg bg-slate-800/50 p-4">
+          <h3 className="font-semibold text-white mb-1">EIP-3009 Signatures</h3>
+          <p className="text-slate-400 text-sm">Users sign a "transferWithAuthorization" message that allows a specific amount to be transferred. No gas required from the user - DefiRelay pays gas for settlement.</p>
+        </div>
+        <div className="rounded-lg bg-slate-800/50 p-4">
+          <h3 className="font-semibold text-white mb-1">Settle-Before-Serve</h3>
+          <p className="text-slate-400 text-sm">Payment is settled on-chain before your service processes the request. You always get paid.</p>
+        </div>
+        <div className="rounded-lg bg-slate-800/50 p-4">
+          <h3 className="font-semibold text-white mb-1">Replay Protection</h3>
+          <p className="text-slate-400 text-sm">Each payment includes a unique nonce. The middleware tracks used nonces to prevent double-spending.</p>
+        </div>
+      </div>
+    </section>
+  )
 }
 
-impl Config {
-    pub fn from_env() -> Result<Self, String> {
-        dotenvy::dotenv().ok();
+function BuildYourBot() {
+  return (
+    <section className="prose prose-invert max-w-none">
+      <h1 className="text-3xl font-bold text-white mb-6">Build Your Own Bot</h1>
 
-        let bot_wallet_address = env::var("BOT_WALLET_ADDRESS")
-            .map_err(|_| "BOT_WALLET_ADDRESS is required")?;
+      <p className="text-slate-300 text-lg mb-8">
+        The x402-llama-bot is a template you can adapt to wrap any service - AI models, APIs, data feeds, or anything else.
+        Here's how to build your own.
+      </p>
 
-        let facilitator_url = env::var("FACILITATOR_URL")
-            .map_err(|_| "FACILITATOR_URL is required")?;
+      {/* Step 1: Clone */}
+      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">1. Clone the Reference</h2>
 
-        let port = env::var("PORT")
-            .unwrap_or_else(|_| "8080".to_string())
-            .parse::<u16>()
-            .map_err(|_| "PORT must be a valid port number")?;
+      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
+        <pre className="p-4 overflow-x-auto">
+          <code className="text-slate-300">{`git clone https://github.com/ethereumdegen/defi-relay-monorepo.git
+cd defi-relay-monorepo/x402-llama-bot`}</code>
+        </pre>
+      </div>
 
-        let cost_per_request = env::var("COST_PER_REQUEST")
-            .unwrap_or_else(|_| "1000".to_string()); // 0.001 USDC
+      {/* Step 2: Structure */}
+      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">2. Understand the Structure</h2>
 
-        Ok(Config {
-            bot_wallet_address,
-            facilitator_url,
-            port,
-            cost_per_request,
-        })
+      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
+        <pre className="p-4 overflow-x-auto">
+          <code className="text-slate-300">{`x402-llama-bot/
+├── src/
+│   ├── main.rs              # Routes & server setup
+│   ├── config.rs            # Environment config
+│   ├── middleware/
+│   │   └── x402.rs          # Payment middleware (reusable!)
+│   ├── models/
+│   │   └── x402.rs          # Payment types (reusable!)
+│   ├── services/
+│   │   ├── facilitator.rs   # DefiRelay client (reusable!)
+│   │   ├── llama.rs         # ← REPLACE THIS with your service
+│   │   └── nonce_tracker.rs # Replay protection (reusable!)
+│   └── handlers/
+│       └── chat.rs          # ← REPLACE THIS with your handler
+└── .env                     # Configuration`}</code>
+        </pre>
+      </div>
+
+      <p className="text-slate-300 mb-6">
+        The key insight: <strong className="text-white">everything except your service client and handler is reusable</strong>.
+        The middleware, models, facilitator client, and nonce tracker work for any service.
+      </p>
+
+      {/* Step 3: Replace Service */}
+      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">3. Replace the Service</h2>
+
+      <p className="text-slate-300 mb-4">
+        The llama-bot wraps a DigitalOcean Llama agent. Replace it with whatever you want to monetize:
+      </p>
+
+      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
+        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
+          <span className="text-slate-400 text-sm">src/services/your_service.rs</span>
+        </div>
+        <pre className="p-4 overflow-x-auto">
+          <code className="text-slate-300">{`// Example: wrapping an image generation API
+pub struct ImageGenClient {
+    client: reqwest::Client,
+    api_key: String,
+    base_url: String,
+}
+
+impl ImageGenClient {
+    pub fn new(base_url: &str, api_key: &str) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            api_key: api_key.to_string(),
+            base_url: base_url.to_string(),
+        }
+    }
+
+    pub async fn generate(&self, prompt: &str) -> Result<ImageResponse, Error> {
+        // Call your upstream service here
+        self.client
+            .post(&format!("{}/generate", self.base_url))
+            .bearer_auth(&self.api_key)
+            .json(&serde_json::json!({"prompt": prompt}))
+            .send()
+            .await?
+            .json()
+            .await
     }
 }`}</code>
         </pre>
       </div>
 
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Environment Variables</h2>
+      {/* Step 4: Wire it up */}
+      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">4. Wire Up Your Handler</h2>
+
+      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
+        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
+          <span className="text-slate-400 text-sm">src/handlers/generate.rs</span>
+        </div>
+        <pre className="p-4 overflow-x-auto">
+          <code className="text-slate-300">{`use actix_web::{web, HttpResponse};
+use crate::services::ImageGenClient;
+
+pub async fn generate_handler(
+    client: web::Data<ImageGenClient>,
+    body: web::Json<GenerateRequest>,
+) -> HttpResponse {
+    // By the time we get here, payment is already settled!
+    // The middleware handled verification and settlement.
+    match client.generate(&body.prompt).await {
+        Ok(result) => HttpResponse::Ok().json(result),
+        Err(e) => HttpResponse::InternalServerError()
+            .body(format!("Generation failed: {}", e)),
+    }
+}`}</code>
+        </pre>
+      </div>
+
+      {/* Step 5: Configure routes */}
+      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">5. Configure Routes</h2>
+
+      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
+        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
+          <span className="text-slate-400 text-sm">src/main.rs (key part)</span>
+        </div>
+        <pre className="p-4 overflow-x-auto">
+          <code className="text-slate-300">{`// Create your service client
+let image_client = ImageGenClient::new(&config.api_url, &config.api_key);
+
+HttpServer::new(move || {
+    App::new()
+        .app_data(web::Data::new(image_client.clone()))
+        // Public routes
+        .route("/health", web::get().to(health_handler))
+        // Protected routes - wrap with X402Middleware
+        .service(
+            web::scope("/generate")
+                .wrap(X402Middleware::new(
+                    config.clone(),
+                    facilitator.clone(),
+                    nonce_tracker.clone(),
+                ))
+                .route("", web::post().to(generate_handler)),
+        )
+})`}</code>
+        </pre>
+      </div>
+
+      {/* Step 6: Configure */}
+      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">6. Set Your Price</h2>
 
       <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
         <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
           <span className="text-slate-400 text-sm">.env</span>
         </div>
         <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`# Your wallet address to receive payments
-BOT_WALLET_ADDRESS=0x...
+          <code className="text-slate-300">{`# Your wallet to receive payments
+BOT_WALLET_ADDRESS=0xYourWalletAddress
 
-# DefiRelay facilitator URL
+# DefiRelay facilitator
 FACILITATOR_URL=https://pay.defirelay.io
 
-# Server port
-PORT=8080
-
-# Cost per request in raw USDC (6 decimals)
+# Price per request (USDC with 6 decimals)
 # 1000 = $0.001, 10000 = $0.01, 1000000 = $1.00
-COST_PER_REQUEST=1000`}</code>
+COST_PER_REQUEST=50000  # $0.05 per generation
+
+# Your service configuration
+API_URL=https://your-upstream-api.com
+API_KEY=your-api-key`}</code>
         </pre>
       </div>
 
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">USDC Pricing Reference</h2>
+      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">That's It!</h2>
 
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`// USDC has 6 decimals on Base
-// Raw amount → USD value
-1000      → $0.001
-10000     → $0.01
-100000    → $0.10
-1000000   → $1.00
-10000000  → $10.00`}</code>
-        </pre>
+      <p className="text-slate-300 mb-4">
+        The middleware handles the entire payment flow:
+      </p>
+
+      <ul className="text-slate-300 space-y-2 mb-6">
+        <li>Returns <code className="bg-slate-800 px-1.5 py-0.5 rounded text-relay-400">402 Payment Required</code> when no payment is provided</li>
+        <li>Verifies signatures via DefiRelay</li>
+        <li>Settles payments on-chain <strong className="text-white">before</strong> your handler runs</li>
+        <li>Prevents replay attacks with nonce tracking</li>
+      </ul>
+
+      <p className="text-slate-300">
+        Your handler only runs after payment is confirmed. Focus on your service logic, not payment infrastructure.
+      </p>
+
+      {/* Link back to source */}
+      <div className="mt-8 p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+        <p className="text-slate-400 text-sm">
+          Full source code:{' '}
+          <a
+            href="https://github.com/ethereumdegen/defi-relay-monorepo/tree/master/x402-llama-bot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-relay-400 hover:text-relay-300"
+          >
+            github.com/ethereumdegen/defi-relay-monorepo/x402-llama-bot
+          </a>
+        </p>
       </div>
     </section>
   )
@@ -306,422 +367,156 @@ function APIReferenceSection() {
       <h1 className="text-3xl font-bold text-white mb-6">API Reference</h1>
 
       <p className="text-slate-300 text-lg mb-8">
-        The DefiRelay API provides endpoints for payment verification and settlement.
+        DefiRelay's facilitator API. Your middleware calls these endpoints to verify and settle payments.
       </p>
 
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Base URL</h2>
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
+      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-8">
+        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
+          <span className="text-slate-400 text-sm">Base URL</span>
+        </div>
         <pre className="p-4 overflow-x-auto">
           <code className="text-relay-400">https://pay.defirelay.io</code>
         </pre>
       </div>
 
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">GET /supported</h2>
-      <p className="text-slate-300 mb-4">Returns a list of supported networks and tokens.</p>
+      {/* POST /verify */}
       <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">Response</span>
+        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50 flex items-center gap-3">
+          <span className="px-2 py-1 rounded text-xs font-mono bg-blue-500/20 text-blue-400">POST</span>
+          <span className="text-white font-mono">/verify</span>
         </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`{
-  "networks": [
-    {
-      "chainId": 8453,
-      "name": "Base",
-      "tokens": [
-        {
-          "symbol": "USDC",
-          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-          "decimals": 6
-        }
-      ]
-    }
-  ]
-}`}</code>
-        </pre>
-      </div>
-
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">GET /discovery/resources</h2>
-      <p className="text-slate-300 mb-4">x402.jobs discovery endpoint. Lists all registered paid resources.</p>
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">Response</span>
-        </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`{
-  "resources": [
-    {
-      "url": "https://example.com/api/premium",
-      "price": {
-        "amount": "10000",
-        "token": "USDC",
-        "decimals": 6
-      },
-      "description": "Premium API access"
-    }
-  ]
-}`}</code>
-        </pre>
-      </div>
-
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">POST /verify</h2>
-      <p className="text-slate-300 mb-4">Validates a payment signature without settling.</p>
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">Request</span>
-        </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`{
-  "payment": "<base64-encoded-signed-payment>",
-  "resource": "/api/premium",
-  "maxPrice": "10000"
-}`}</code>
-        </pre>
-      </div>
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">Response</span>
-        </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`{
-  "valid": true,
-  "payment": {
-    "from": "0x...",
-    "to": "0x...",
+        <div className="p-4">
+          <p className="text-slate-300 mb-4">Validates a payment signature without executing on-chain. Call this first.</p>
+          <div className="grid lg:grid-cols-2 gap-4">
+            <div>
+              <span className="text-slate-400 text-sm block mb-2">Request</span>
+              <pre className="bg-slate-800/50 rounded p-3 overflow-x-auto">
+                <code className="text-slate-300 text-sm">{`{
+  "paymentPayload": { /* from X-PAYMENT header */ },
+  "paymentRequirements": {
+    "scheme": "exact",
+    "network": "eip155:8453",
     "amount": "10000",
-    "nonce": "123456",
-    "deadline": 1704067200
+    "payTo": "0x...",
+    "asset": "0x833589fCD...",
+    "maxTimeoutSeconds": 60
   }
 }`}</code>
-        </pre>
+              </pre>
+            </div>
+            <div>
+              <span className="text-slate-400 text-sm block mb-2">Response</span>
+              <pre className="bg-slate-800/50 rounded p-3 overflow-x-auto">
+                <code className="text-slate-300 text-sm">{`{
+  "isValid": true,
+  "payer": "0x..."
+}
+// or
+{
+  "isValid": false,
+  "invalidReason": "Insufficient balance"
+}`}</code>
+              </pre>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">POST /settle</h2>
-      <p className="text-slate-300 mb-4">Submits the payment transaction on-chain.</p>
+      {/* POST /settle */}
       <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">Request</span>
+        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50 flex items-center gap-3">
+          <span className="px-2 py-1 rounded text-xs font-mono bg-green-500/20 text-green-400">POST</span>
+          <span className="text-white font-mono">/settle</span>
         </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`{
-  "payment": "<base64-encoded-signed-payment>",
-  "resource": "/api/premium"
+        <div className="p-4">
+          <p className="text-slate-300 mb-4">Executes the payment on-chain. Call this after verify succeeds, before processing the request.</p>
+          <div className="grid lg:grid-cols-2 gap-4">
+            <div>
+              <span className="text-slate-400 text-sm block mb-2">Request</span>
+              <pre className="bg-slate-800/50 rounded p-3 overflow-x-auto">
+                <code className="text-slate-300 text-sm">{`{
+  "paymentPayload": { /* same as verify */ },
+  "paymentRequirements": { /* same as verify */ }
 }`}</code>
-        </pre>
-      </div>
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">Response</span>
-        </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`{
+              </pre>
+            </div>
+            <div>
+              <span className="text-slate-400 text-sm block mb-2">Response</span>
+              <pre className="bg-slate-800/50 rounded p-3 overflow-x-auto">
+                <code className="text-slate-300 text-sm">{`{
   "success": true,
-  "txHash": "0x...",
-  "receipt": {
-    "blockNumber": 12345678,
-    "gasUsed": "85000",
-    "effectiveGasPrice": "1000000"
-  }
-}`}</code>
-        </pre>
-      </div>
-    </section>
-  )
+  "transaction": "0xabc..."
 }
-
-function Examples() {
-  return (
-    <section className="prose prose-invert max-w-none">
-      <h1 className="text-3xl font-bold text-white mb-6">Examples</h1>
-
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Complete Actix Web App</h2>
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">src/main.rs</span>
+// or
+{
+  "success": false,
+  "errorReason": "Settlement failed"
+}`}</code>
+              </pre>
+            </div>
+          </div>
         </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`use actix_web::{web, App, HttpResponse, HttpServer};
-use config::Config;
-use middleware::X402Middleware;
-use services::FacilitatorClient;
-
-mod config;
-mod middleware;
-mod models;
-mod services;
-
-async fn health_handler() -> HttpResponse {
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "healthy"
-    }))
-}
-
-async fn premium_handler() -> HttpResponse {
-    // Payment already verified by middleware
-    HttpResponse::Ok().json(serde_json::json!({
-        "premium": true,
-        "data": "Your premium content here"
-    }))
-}
-
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
-    let config = Config::from_env().expect("Config error");
-    let facilitator = FacilitatorClient::new(&config.facilitator_url);
-
-    HttpServer::new(move || {
-        App::new()
-            .route("/health", web::get().to(health_handler))
-            .service(
-                web::scope("/api/premium")
-                    .wrap(X402Middleware::new(
-                        config.clone(),
-                        facilitator.clone(),
-                    ))
-                    .route("", web::post().to(premium_handler)),
-            )
-    })
-    .bind(("0.0.0.0", config.port))?
-    .run()
-    .await
-}`}</code>
-        </pre>
       </div>
 
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">X402 Middleware</h2>
+      {/* GET /supported */}
       <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">src/middleware/x402.rs</span>
+        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50 flex items-center gap-3">
+          <span className="px-2 py-1 rounded text-xs font-mono bg-purple-500/20 text-purple-400">GET</span>
+          <span className="text-white font-mono">/supported</span>
         </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`use actix_web::{
-    dev::{Service, ServiceRequest, ServiceResponse, Transform},
-    Error, HttpResponse,
-};
-use crate::models::{
-    PaymentPayload, PaymentRequired, PaymentRequirements,
-    X402_VERSION, BASE_NETWORK, USDC_BASE_ADDRESS,
-};
-
-pub struct X402Middleware {
-    config: Config,
-    facilitator: FacilitatorClient,
-}
-
-impl X402Middleware {
-    pub fn new(config: Config, facilitator: FacilitatorClient) -> Self {
-        X402Middleware { config, facilitator }
-    }
-}
-
-// In the service call:
-fn call(&self, req: ServiceRequest) -> Self::Future {
-    let payment_header = req
-        .headers()
-        .get("X-PAYMENT")
-        .and_then(|v| v.to_str().ok());
-
-    match payment_header {
-        None => {
-            // Return 402 Payment Required
-            let payment_required = PaymentRequired::new(
-                &config.bot_wallet_address,
-                &config.cost_per_request,
-                req.path(),
-            );
-            let encoded = payment_required.to_base64()?;
-
-            HttpResponse::PaymentRequired()
-                .insert_header(("payment-required", encoded))
-                .body("Payment required")
-        }
-        Some(payment_header_value) => {
-            // Decode payment payload
-            let payment_payload = PaymentPayload::from_base64(&payment_header_value)?;
-
-            // Create payment requirements for verification (x402 v2)
-            let payment_requirements = PaymentRequirements {
-                x402_version: X402_VERSION,
-                scheme: "exact".to_string(),
-                network: BASE_NETWORK.to_string(),
-                max_amount_required: config.cost_per_request.clone(),
-                resource: req.path().to_string(),
-                description: "API access".to_string(),
-                pay_to_address: config.bot_wallet_address.clone(),
-                asset: USDC_BASE_ADDRESS.to_string(),
-                max_timeout_seconds: 60,
-                mime_type: None,
-                extra: None,
-            };
-
-            // Verify payment with facilitator
-            let result = facilitator.verify(payment_payload, payment_requirements).await?;
-            if result.is_valid {
-                service.call(req).await
-            } else {
-                let error = result.invalid_reason.unwrap_or_default();
-                HttpResponse::PaymentRequired()
-                    .body(format!("Payment failed: {}", error))
-            }
-        }
-    }
+        <div className="p-4">
+          <p className="text-slate-300 mb-4">Lists supported networks and tokens.</p>
+          <pre className="bg-slate-800/50 rounded p-3 overflow-x-auto">
+            <code className="text-slate-300 text-sm">{`{
+  "networks": [{
+    "chainId": 8453,
+    "name": "Base",
+    "tokens": [{
+      "symbol": "USDC",
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "decimals": 6
+    }]
+  }]
 }`}</code>
-        </pre>
+          </pre>
+        </div>
       </div>
 
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Facilitator Client</h2>
+      {/* USDC Pricing */}
+      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">USDC Pricing</h2>
+      <p className="text-slate-300 mb-4">USDC on Base uses 6 decimals. Here's a quick reference:</p>
+
       <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">src/services/facilitator.rs</span>
-        </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`use crate::models::{PaymentPayload, PaymentRequirements, VerifyRequest, VerifyResponse};
-use reqwest::Client;
-
-#[derive(Clone)]
-pub struct FacilitatorClient {
-    client: Client,
-    base_url: String,
-}
-
-impl FacilitatorClient {
-    pub fn new(base_url: &str) -> Self {
-        FacilitatorClient {
-            client: Client::new(),
-            base_url: base_url.trim_end_matches('/').to_string(),
-        }
-    }
-
-    pub async fn verify(
-        &self,
-        payment_payload: PaymentPayload,
-        payment_requirements: PaymentRequirements,
-    ) -> Result<VerifyResponse, AppError> {
-        let url = format!("{}/verify", self.base_url);
-
-        let request = VerifyRequest {
-            payment_payload,
-            payment_requirements,
-        };
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
-
-        let verify_response: VerifyResponse = response.json().await?;
-        Ok(verify_response)
-    }
-}`}</code>
-        </pre>
+        <table className="w-full text-left">
+          <thead>
+            <tr className="border-b border-slate-800/50">
+              <th className="px-4 py-3 text-slate-400 font-medium">Raw Amount</th>
+              <th className="px-4 py-3 text-slate-400 font-medium">USD Value</th>
+            </tr>
+          </thead>
+          <tbody className="text-slate-300">
+            <tr className="border-b border-slate-800/30"><td className="px-4 py-2 font-mono">1000</td><td className="px-4 py-2">$0.001</td></tr>
+            <tr className="border-b border-slate-800/30"><td className="px-4 py-2 font-mono">10000</td><td className="px-4 py-2">$0.01</td></tr>
+            <tr className="border-b border-slate-800/30"><td className="px-4 py-2 font-mono">100000</td><td className="px-4 py-2">$0.10</td></tr>
+            <tr className="border-b border-slate-800/30"><td className="px-4 py-2 font-mono">1000000</td><td className="px-4 py-2">$1.00</td></tr>
+            <tr><td className="px-4 py-2 font-mono">10000000</td><td className="px-4 py-2">$10.00</td></tr>
+          </tbody>
+        </table>
       </div>
 
-      <h2 className="text-2xl font-semibold text-white mt-10 mb-4">Payment Models</h2>
-      <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">
-        <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/50">
-          <span className="text-slate-400 text-sm">src/models/x402.rs</span>
-        </div>
-        <pre className="p-4 overflow-x-auto">
-          <code className="text-slate-300">{`use serde::{Deserialize, Serialize};
-
-/// USDC contract address on Base mainnet
-pub const USDC_BASE_ADDRESS: &str =
-    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-
-/// Base mainnet network identifier (x402 v2 format)
-pub const BASE_NETWORK: &str = "eip155:8453";
-
-/// x402 protocol version
-pub const X402_VERSION: u32 = 2;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentRequired {
-    pub x402_version: u32,
-    pub accepts: Vec<PaymentRequirements>,
-}
-
-/// Payment requirements (x402 v2 format)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentRequirements {
-    pub x402_version: u32,
-    pub scheme: String,
-    pub network: String,
-    pub max_amount_required: String,
-    pub resource: String,
-    pub description: String,
-    pub pay_to_address: String,
-    pub asset: String,
-    pub max_timeout_seconds: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mime_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extra: Option<serde_json::Value>,
-}
-
-impl PaymentRequired {
-    pub fn new(pay_to: &str, amount: &str, resource: &str) -> Self {
-        PaymentRequired {
-            x402_version: X402_VERSION,
-            accepts: vec![PaymentRequirements {
-                x402_version: X402_VERSION,
-                scheme: "exact".to_string(),
-                network: BASE_NETWORK.to_string(),
-                max_amount_required: amount.to_string(),
-                resource: resource.to_string(),
-                description: "API access".to_string(),
-                pay_to_address: pay_to.to_string(),
-                asset: USDC_BASE_ADDRESS.to_string(),
-                max_timeout_seconds: 60,
-                mime_type: None,
-                extra: None,
-            }],
-        }
-    }
-
-    pub fn to_base64(&self) -> Result<String, serde_json::Error> {
-        let json = serde_json::to_string(self)?;
-        Ok(base64::engine::general_purpose::STANDARD.encode(json))
-    }
-}
-
-/// Payment payload sent by client (x402 v2 format)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentPayload {
-    pub x402_version: u32,
-    pub scheme: String,
-    pub network: String,
-    pub payload: Eip3009Payload,
-    pub signature: String,
-}
-
-/// EIP-3009 authorization payload
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Eip3009Payload {
-    pub from: String,
-    pub to: String,
-    pub value: String,
-    pub valid_after: String,
-    pub valid_before: String,
-    pub nonce: String,
-}
-
-/// Response from facilitator /verify endpoint
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VerifyResponse {
-    pub is_valid: bool,
-    #[serde(default)]
-    pub payer: Option<String>,
-    #[serde(default)]
-    pub invalid_reason: Option<String>,
-}`}</code>
-        </pre>
+      {/* Full Source */}
+      <div className="mt-8 p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+        <p className="text-slate-400 text-sm">
+          See the middleware implementation for complete request/response handling:{' '}
+          <a
+            href="https://github.com/ethereumdegen/defi-relay-monorepo/tree/master/x402-llama-bot/src/middleware"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-relay-400 hover:text-relay-300"
+          >
+            x402-llama-bot/src/middleware
+          </a>
+        </p>
       </div>
     </section>
   )
