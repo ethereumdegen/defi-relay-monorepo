@@ -13,6 +13,44 @@ use services::{FacilitatorClient, LlamaClient};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
+/// Root endpoint with usage instructions
+async fn root_handler() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("text/plain")
+        .body(
+r#"x402 Llama Bot - Pay-per-request AI Chat
+
+This bot provides access to a Llama AI agent using the x402 payment protocol.
+
+ENDPOINTS:
+  GET  /           - This help page
+  GET  /health     - Health check
+  GET  /agent.json - Agent metadata (x402 discovery)
+  POST /chat       - Chat with the Llama agent (payment required)
+
+USAGE:
+  1. Send a POST request to /chat with an OpenAI-compatible chat payload
+  2. If no payment header is provided, you'll receive a 402 response
+     with payment requirements in the "payment-required" header
+  3. Create a payment using the x402 protocol and include it in
+     the "X-PAYMENT" header
+  4. The bot will verify payment and forward your request to Llama
+
+EXAMPLE REQUEST:
+  POST /chat
+  Content-Type: application/json
+  X-PAYMENT: <base64-encoded-payment>
+
+  {
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }
+
+For more info on x402: https://www.x402.org
+"#)
+}
+
 /// Health check endpoint
 async fn health_handler() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
@@ -58,6 +96,7 @@ async fn main() -> std::io::Result<()> {
             // Share Llama client across handlers
             .app_data(web::Data::new(llama_client.clone()))
             // Public endpoints (no payment required)
+            .route("/", web::get().to(root_handler))
             .route("/health", web::get().to(health_handler))
             .route("/agent.json", web::get().to(agent_info_handler))
             // Protected endpoint with x402 middleware

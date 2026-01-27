@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::models::{ChatRequest, ChatResponse};
 use reqwest::Client;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub struct LlamaClient {
@@ -14,20 +14,24 @@ impl LlamaClient {
     pub fn new(endpoint: &str, secret: &str) -> Self {
         LlamaClient {
             client: Client::new(),
-            endpoint: endpoint.trim_end_matches('/').to_string(),
+            endpoint: endpoint.to_string(),
             secret: secret.to_string(),
         }
     }
 
     /// Send a chat request to the DigitalOcean Llama agent
     pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse, AppError> {
-        let url = format!("{}/api/v1/chat/completions", self.endpoint);
-
-        debug!("Sending chat request to DO agent: {}", url);
+        info!("Sending chat request to Llama agent at: {}", self.endpoint);
+        info!(
+            "Request model: {}, messages: {}",
+            request.model.as_deref().unwrap_or("default"),
+            request.messages.len()
+        );
+        debug!("Full request: {:?}", request);
 
         let response = self
             .client
-            .post(&url)
+            .post(&self.endpoint)
             .header("Authorization", format!("Bearer {}", self.secret))
             .header("Content-Type", "application/json")
             .json(request)
@@ -53,7 +57,18 @@ impl LlamaClient {
             AppError::LlamaAgent(format!("Invalid response: {}", e))
         })?;
 
-        debug!("Received response from Llama agent");
+        info!(
+            "Llama response received - model: {}, choices: {}",
+            chat_response.model,
+            chat_response.choices.len()
+        );
+        if let Some(usage) = &chat_response.usage {
+            info!(
+                "Token usage - prompt: {}, completion: {}, total: {}",
+                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+            );
+        }
+        debug!("Full response: {:?}", chat_response);
 
         Ok(chat_response)
     }
