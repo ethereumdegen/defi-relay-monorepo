@@ -24,10 +24,11 @@ r#"x402 Llama Bot - Pay-per-request AI Chat
 This bot provides access to a Llama AI agent using the x402 payment protocol.
 
 ENDPOINTS:
-  GET  /           - This help page
-  GET  /health     - Health check
-  GET  /agent.json - Agent metadata (x402 discovery)
-  POST /chat       - Chat with the Llama agent (payment required)
+  GET  /                       - This help page
+  GET  /health                 - Health check
+  GET  /agent.json             - Agent metadata (x402 discovery)
+  POST /chat                   - Chat with the Llama agent (payment required)
+  POST /api/v1/chat/completions - OpenAI-compatible endpoint (payment required)
 
 USAGE:
   1. Send a POST request to /chat with an OpenAI-compatible chat payload
@@ -114,7 +115,7 @@ async fn main() -> std::io::Result<()> {
             .route("/", web::get().to(root_handler))
             .route("/health", web::get().to(health_handler))
             .route("/agent.json", web::get().to(agent_info_handler))
-            // Protected endpoint with x402 middleware
+            // Protected endpoints with x402 middleware
             .service(
                 web::scope("/chat")
                     .wrap(X402Middleware::new(
@@ -122,6 +123,15 @@ async fn main() -> std::io::Result<()> {
                         facilitator_for_middleware.clone(),
                     ))
                     .route("", web::post().to(chat_handler)),
+            )
+            // OpenAI-compatible endpoint
+            .service(
+                web::scope("/api/v1/chat")
+                    .wrap(X402Middleware::new(
+                        config_for_middleware.clone(),
+                        facilitator_for_middleware.clone(),
+                    ))
+                    .route("/completions", web::post().to(chat_handler)),
             )
     })
     .bind(("0.0.0.0", port))?
