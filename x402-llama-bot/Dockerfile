@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 
 COPY --from=builder /app/target/release/x402-llama-bot /usr/local/bin/x402-llama-bot
+COPY --from=builder /app/public ./public
 
 EXPOSE $PORT
 ENV RUST_LOG=info

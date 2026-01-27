@@ -9,10 +9,11 @@ use actix_cors::Cors;
 use actix_files::Files;
 use actix_web::{http::header, web, App, HttpResponse, HttpServer};
 use std::fs;
+use std::sync::Arc;
 use config::Config;
 use handlers::{agent_info_handler, chat_handler};
 use middleware::X402Middleware;
-use services::{FacilitatorClient, LlamaClient};
+use services::{FacilitatorClient, LlamaClient, NonceTracker};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -115,9 +116,14 @@ async fn main() -> std::io::Result<()> {
     let facilitator_client = FacilitatorClient::new(&config.facilitator_url);
     let llama_client = LlamaClient::new(&config.do_agent_endpoint, &config.do_agent_secret);
 
+    // Create nonce tracker for replay protection (10 minute TTL)
+    let nonce_tracker = Arc::new(NonceTracker::with_default_ttl());
+    info!("Nonce tracker initialized for replay protection");
+
     // Store config for middleware
     let config_for_middleware = config.clone();
     let facilitator_for_middleware = facilitator_client.clone();
+    let nonce_tracker_for_middleware = nonce_tracker.clone();
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -149,6 +155,7 @@ async fn main() -> std::io::Result<()> {
                     .wrap(X402Middleware::new(
                         config_for_middleware.clone(),
                         facilitator_for_middleware.clone(),
+                        nonce_tracker_for_middleware.clone(),
                     ))
                     .route("", web::post().to(chat_handler)),
             )
@@ -158,6 +165,7 @@ async fn main() -> std::io::Result<()> {
                     .wrap(X402Middleware::new(
                         config_for_middleware.clone(),
                         facilitator_for_middleware.clone(),
+                        nonce_tracker_for_middleware.clone(),
                     ))
                     .route("/completions", web::post().to(chat_handler)),
             )

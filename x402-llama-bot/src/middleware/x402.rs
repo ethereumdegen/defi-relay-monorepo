@@ -3,7 +3,7 @@ use crate::models::{
     PaymentPayload, PaymentRequired, PaymentResponse, VerifyPaymentRequirements,
     usdc_address, BASE_NETWORK,
 };
-use crate::services::FacilitatorClient;
+use crate::services::{FacilitatorClient, NonceTracker};
 use actix_web::{
     body::EitherBody,
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
@@ -12,7 +12,7 @@ use actix_web::{
 };
 use std::future::{ready, Future, Ready};
 use std::pin::Pin;
-use std::rc::Rc;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 const X_PAYMENT_HEADER: &str = "X-PAYMENT";
@@ -21,13 +21,15 @@ const PAYMENT_REQUIRED_HEADER: &str = "PAYMENT-REQUIRED";
 pub struct X402Middleware {
     config: Config,
     facilitator: FacilitatorClient,
+    nonce_tracker: Arc<NonceTracker>,
 }
 
 impl X402Middleware {
-    pub fn new(config: Config, facilitator: FacilitatorClient) -> Self {
+    pub fn new(config: Config, facilitator: FacilitatorClient, nonce_tracker: Arc<NonceTracker>) -> Self {
         X402Middleware {
             config,
             facilitator,
+            nonce_tracker,
         }
     }
 }
@@ -46,17 +48,19 @@ where
 
     fn new_transform(&self, service: S) -> Self::Future {
         ready(Ok(X402MiddlewareService {
-            service: Rc::new(service),
+            service: Arc::new(service),
             config: self.config.clone(),
             facilitator: self.facilitator.clone(),
+            nonce_tracker: self.nonce_tracker.clone(),
         }))
     }
 }
 
 pub struct X402MiddlewareService<S> {
-    service: Rc<S>,
+    service: Arc<S>,
     config: Config,
     facilitator: FacilitatorClient,
+    nonce_tracker: Arc<NonceTracker>,
 }
 
 impl<S, B> Service<ServiceRequest> for X402MiddlewareService<S>
@@ -72,9 +76,10 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        let service = Rc::clone(&self.service);
+        let service = Arc::clone(&self.service);
         let config = self.config.clone();
         let facilitator = self.facilitator.clone();
+        let nonce_tracker = self.nonce_tracker.clone();
 
         Box::pin(async move {
             // Check for X-PAYMENT header
@@ -143,6 +148,24 @@ where
                         }
                     };
 
+                    // Extract nonce and check for replay attack
+                    let nonce_hex = payment_payload.payload.authorization.nonce.to_hex();
+                    if !nonce_tracker.try_use_nonce(&nonce_hex) {
+                        warn!("Replay attack detected! Nonce already used: {}", nonce_hex);
+                        let payment_response = PaymentResponse::failure("Payment nonce already used (replay attack prevented)");
+                        let encoded = payment_response.to_base64().unwrap_or_default();
+
+                        let response = HttpResponse::PaymentRequired()
+                            .insert_header((
+                                HeaderName::from_static("payment-response"),
+                                HeaderValue::from_str(&encoded)
+                                    .unwrap_or_else(|_| HeaderValue::from_static("")),
+                            ))
+                            .body("Payment rejected: nonce already used");
+
+                        return Ok(req.into_response(response).map_into_right_body());
+                    }
+
                     // Create payment requirements for verification (x402 v2 format)
                     let payment_requirements = VerifyPaymentRequirements {
                         scheme: "exact".to_string(),
@@ -158,19 +181,17 @@ where
                     let payment_payload_for_settle = payment_payload.clone();
                     let payment_requirements_for_settle = payment_requirements.clone();
 
-                    // Verify with facilitator
+                    // Step 1: Verify with facilitator
                     let verify_result = facilitator
                         .verify(payment_payload, payment_requirements)
                         .await;
 
                     match verify_result {
                         Ok(verify_response) if verify_response.is_valid => {
-                            info!("Payment verified, proceeding with request");
+                            info!("Payment verified, attempting settlement before processing request");
 
-                            // Payment verified - proceed with request
-                            let res = service.call(req).await?;
-
-                            // After successful response, settle the payment
+                            // Step 2: Settle BEFORE processing the request
+                            // This ensures we collect payment before delivering the service
                             let settle_result = facilitator
                                 .settle(payment_payload_for_settle, payment_requirements_for_settle)
                                 .await;
@@ -178,9 +199,12 @@ where
                             match settle_result {
                                 Ok(settle_response) if settle_response.success => {
                                     info!(
-                                        "Payment settled. Tx: {:?}",
+                                        "Payment settled successfully. Tx: {:?}. Proceeding with request.",
                                         settle_response.transaction
                                     );
+
+                                    // Step 3: Payment collected - now process the request
+                                    let res = service.call(req).await?;
 
                                     // Add payment response header to successful response
                                     let payment_response = PaymentResponse::success();
@@ -199,47 +223,47 @@ where
                                     Ok(ServiceResponse::new(req, response))
                                 }
                                 Ok(settle_response) => {
-                                    // Settlement failed - but we already processed the request
-                                    // Log the error but still return success since we delivered the service
-                                    error!(
-                                        "Payment settlement failed after request completed: {:?}",
-                                        settle_response.error_reason
-                                    );
+                                    // Settlement failed - do NOT process the request
+                                    let error_msg = settle_response
+                                        .error_reason
+                                        .unwrap_or_else(|| "Settlement failed".to_string());
+                                    error!("Payment settlement failed: {}. Request rejected.", error_msg);
 
-                                    let payment_response = PaymentResponse::success();
+                                    let payment_response = PaymentResponse::failure(&format!(
+                                        "Payment settlement failed: {}",
+                                        error_msg
+                                    ));
                                     let encoded = payment_response.to_base64().unwrap_or_default();
 
-                                    let (req, response) = res.into_parts();
-                                    let mut response = response.map_into_left_body();
-
-                                    if let Ok(header_value) = HeaderValue::from_str(&encoded) {
-                                        response.headers_mut().insert(
+                                    let response = HttpResponse::PaymentRequired()
+                                        .insert_header((
                                             HeaderName::from_static("payment-response"),
-                                            header_value,
-                                        );
-                                    }
+                                            HeaderValue::from_str(&encoded)
+                                                .unwrap_or_else(|_| HeaderValue::from_static("")),
+                                        ))
+                                        .body(format!("Payment settlement failed: {}", error_msg));
 
-                                    Ok(ServiceResponse::new(req, response))
+                                    Ok(req.into_response(response).map_into_right_body())
                                 }
                                 Err(e) => {
-                                    // Settlement error - but we already processed the request
-                                    // Log the error but still return success since we delivered the service
-                                    error!("Settlement error after request completed: {}", e);
+                                    // Settlement error - do NOT process the request
+                                    error!("Settlement error: {}. Request rejected.", e);
 
-                                    let payment_response = PaymentResponse::success();
+                                    let payment_response = PaymentResponse::failure(&format!(
+                                        "Settlement error: {}",
+                                        e
+                                    ));
                                     let encoded = payment_response.to_base64().unwrap_or_default();
 
-                                    let (req, response) = res.into_parts();
-                                    let mut response = response.map_into_left_body();
-
-                                    if let Ok(header_value) = HeaderValue::from_str(&encoded) {
-                                        response.headers_mut().insert(
+                                    let response = HttpResponse::PaymentRequired()
+                                        .insert_header((
                                             HeaderName::from_static("payment-response"),
-                                            header_value,
-                                        );
-                                    }
+                                            HeaderValue::from_str(&encoded)
+                                                .unwrap_or_else(|_| HeaderValue::from_static("")),
+                                        ))
+                                        .body(format!("Settlement error: {}", e));
 
-                                    Ok(ServiceResponse::new(req, response))
+                                    Ok(req.into_response(response).map_into_right_body())
                                 }
                             }
                         }
