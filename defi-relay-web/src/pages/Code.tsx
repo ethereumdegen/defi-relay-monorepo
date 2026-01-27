@@ -3,11 +3,9 @@ import {
   Bot,
   CreditCard,
   FileCode,
-  Wrench,
   GitBranch,
   ArrowRight,
   ExternalLink,
-  Cpu,
   Layers,
   Zap
 } from 'lucide-react'
