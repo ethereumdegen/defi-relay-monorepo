@@ -12,6 +12,7 @@ export function Navbar() {
     { href: '/#api', label: 'API' },
     { href: '/docs', label: 'Docs' },
     { href: '/try-it-out', label: 'Try It Out' },
+    { href: '/rpc', label: 'RPC' },
   ]
 
   return (

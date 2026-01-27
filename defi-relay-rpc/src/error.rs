@@ -16,6 +16,9 @@ pub enum AppError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("Heavy method '{0}' not allowed on light endpoint. Use /rpc/heavy/{{network}} instead.")]
+    HeavyMethodNotAllowed(String),
 }
 
 impl ResponseError for AppError {
@@ -33,6 +36,12 @@ impl ResponseError for AppError {
             }
             AppError::Internal(msg) => {
                 HttpResponse::InternalServerError().body(format!("Internal error: {}", msg))
+            }
+            AppError::HeavyMethodNotAllowed(method) => {
+                HttpResponse::BadRequest().body(format!(
+                    "Heavy method '{}' not allowed on light endpoint. Use /rpc/heavy/{{network}} instead.",
+                    method
+                ))
             }
         }
     }

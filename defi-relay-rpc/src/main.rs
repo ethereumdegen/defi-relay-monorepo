@@ -8,7 +8,7 @@ mod services;
 use actix_cors::Cors;
 use actix_web::{http::header, web, App, HttpResponse, HttpServer};
 use config::{load_networks_from_env, Config, NetworkRegistry, HEAVY_METHODS};
-use handlers::{agent_info_handler, rpc_handler, x402_discovery_handler};
+use handlers::{agent_info_handler, heavy_rpc_handler, light_rpc_handler, x402_discovery_handler};
 use middleware::X402Middleware;
 use services::{FacilitatorClient, NonceTracker};
 use std::sync::Arc;
@@ -59,19 +59,22 @@ ENDPOINTS:
   GET  /networks                - List available networks (JSON)
   GET  /agent.json              - EIP-8004 agent metadata
   GET  /.well-known/x402        - x402 discovery document
-  POST /rpc/light/{{network}}     - Light JSON-RPC endpoint (standard methods)
-  POST /rpc/heavy/{{network}}     - Heavy JSON-RPC endpoint (eth_getLogs, traces, etc.)
+  POST /rpc/light/{{network}}     - Light JSON-RPC endpoint (non-heavy methods only)
+  POST /rpc/heavy/{{network}}     - Heavy JSON-RPC endpoint (ALL methods supported)
 
-HEAVY METHODS (use /rpc/heavy/{{network}}):
+HEAVY METHODS (require /rpc/heavy/{{network}}):
 {}
 
 USAGE:
-  1. Send a POST request to /rpc/light/{{network}} or /rpc/heavy/{{network}}
-  2. If no payment header is provided, you'll receive a 402 response
+  1. Choose your endpoint:
+     - /rpc/light/{{network}} for standard methods (lower cost)
+     - /rpc/heavy/{{network}} for heavy methods OR if you want a single endpoint for all methods
+  2. Send a POST request to your chosen endpoint
+  3. If no payment header is provided, you'll receive a 402 response
      with payment requirements in the "payment-required" header
-  3. Create a payment using the x402 protocol and include it in
+  4. Create a payment using the x402 protocol and include it in
      the "X-PAYMENT" header
-  4. The service will verify payment and forward your request to the RPC node
+  5. The service will verify payment and forward your request to the RPC node
 
 EXAMPLE REQUESTS:
   # Light request (standard cost)
@@ -214,17 +217,17 @@ async fn main() -> std::io::Result<()> {
             // RPC endpoints under /rpc scope
             .service(
                 web::scope("/rpc")
-                    // Light RPC endpoint (standard cost)
+                    // Light RPC endpoint (standard cost, non-heavy methods only)
                     .service(
                         web::scope("/light/{network}")
                             .wrap(standard_middleware)
-                            .route("", web::post().to(rpc_handler)),
+                            .route("", web::post().to(light_rpc_handler)),
                     )
-                    // Heavy RPC endpoint (higher cost)
+                    // Heavy RPC endpoint (higher cost, supports ALL methods)
                     .service(
                         web::scope("/heavy/{network}")
                             .wrap(heavy_middleware)
-                            .route("", web::post().to(rpc_handler)),
+                            .route("", web::post().to(heavy_rpc_handler)),
                     ),
             )
     })
