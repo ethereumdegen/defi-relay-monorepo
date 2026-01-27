@@ -1,7 +1,10 @@
 use crate::error::AppError;
-use crate::models::{PaymentPayload, VerifyPaymentRequirements, VerifyRequest, VerifyResponse, X402_VERSION};
+use crate::models::{
+    PaymentPayload, SettleRequest, SettleResponse, VerifyPaymentRequirements, VerifyRequest,
+    VerifyResponse, X402_VERSION,
+};
 use reqwest::Client;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone)]
 pub struct FacilitatorClient {
@@ -72,5 +75,62 @@ impl FacilitatorClient {
         }
 
         Ok(verify_response)
+    }
+
+    /// Settle a verified payment with the facilitator service
+    pub async fn settle(
+        &self,
+        payment_payload: PaymentPayload,
+        payment_requirements: VerifyPaymentRequirements,
+    ) -> Result<SettleResponse, AppError> {
+        let url = format!("{}/settle", self.base_url);
+
+        let request = SettleRequest {
+            x402_version: X402_VERSION,
+            payment_payload,
+            payment_requirements,
+        };
+
+        debug!("Sending settle request to facilitator: {}", url);
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                error!("Failed to connect to facilitator for settlement: {}", e);
+                AppError::Facilitator(format!("Settlement connection failed: {}", e))
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            error!("Facilitator settlement returned error: {} - {}", status, body);
+            return Err(AppError::Facilitator(format!(
+                "Settlement failed with {}: {}",
+                status, body
+            )));
+        }
+
+        let settle_response: SettleResponse = response.json().await.map_err(|e| {
+            error!("Failed to parse facilitator settlement response: {}", e);
+            AppError::Facilitator(format!("Invalid settlement response: {}", e))
+        })?;
+
+        if settle_response.success {
+            info!(
+                "Payment settled successfully. Tx: {:?}, Payer: {:?}",
+                settle_response.transaction, settle_response.payer
+            );
+        } else {
+            warn!(
+                "Payment settlement failed: {:?}",
+                settle_response.error_reason
+            );
+        }
+
+        Ok(settle_response)
     }
 }

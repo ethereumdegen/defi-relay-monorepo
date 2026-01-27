@@ -160,6 +160,30 @@ pub struct VerifyResponse {
     pub invalid_reason: Option<String>,
 }
 
+/// Request to facilitator /settle endpoint (same format as verify)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettleRequest {
+    pub x402_version: u8,
+    pub payment_payload: PaymentPayload,
+    pub payment_requirements: VerifyPaymentRequirements,
+}
+
+/// Response from facilitator /settle endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettleResponse {
+    pub success: bool,
+    #[serde(default)]
+    pub payer: Option<String>,
+    #[serde(default)]
+    pub transaction: Option<String>,
+    #[serde(default)]
+    pub network: Option<String>,
+    #[serde(default)]
+    pub error_reason: Option<String>,
+}
+
 /// Payment response header content
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

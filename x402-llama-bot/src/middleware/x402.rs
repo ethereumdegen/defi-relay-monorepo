@@ -154,6 +154,10 @@ where
                         extra: None,
                     };
 
+                    // Clone payment data for use in both verify and settle
+                    let payment_payload_for_settle = payment_payload.clone();
+                    let payment_requirements_for_settle = payment_requirements.clone();
+
                     // Verify with facilitator
                     let verify_result = facilitator
                         .verify(payment_payload, payment_requirements)
@@ -166,21 +170,78 @@ where
                             // Payment verified - proceed with request
                             let res = service.call(req).await?;
 
-                            // Add payment response header to successful response
-                            let payment_response = PaymentResponse::success();
-                            let encoded = payment_response.to_base64().unwrap_or_default();
+                            // After successful response, settle the payment
+                            let settle_result = facilitator
+                                .settle(payment_payload_for_settle, payment_requirements_for_settle)
+                                .await;
 
-                            let (req, response) = res.into_parts();
-                            let mut response = response.map_into_left_body();
+                            match settle_result {
+                                Ok(settle_response) if settle_response.success => {
+                                    info!(
+                                        "Payment settled. Tx: {:?}",
+                                        settle_response.transaction
+                                    );
 
-                            if let Ok(header_value) = HeaderValue::from_str(&encoded) {
-                                response.headers_mut().insert(
-                                    HeaderName::from_static("payment-response"),
-                                    header_value,
-                                );
+                                    // Add payment response header to successful response
+                                    let payment_response = PaymentResponse::success();
+                                    let encoded = payment_response.to_base64().unwrap_or_default();
+
+                                    let (req, response) = res.into_parts();
+                                    let mut response = response.map_into_left_body();
+
+                                    if let Ok(header_value) = HeaderValue::from_str(&encoded) {
+                                        response.headers_mut().insert(
+                                            HeaderName::from_static("payment-response"),
+                                            header_value,
+                                        );
+                                    }
+
+                                    Ok(ServiceResponse::new(req, response))
+                                }
+                                Ok(settle_response) => {
+                                    // Settlement failed - but we already processed the request
+                                    // Log the error but still return success since we delivered the service
+                                    error!(
+                                        "Payment settlement failed after request completed: {:?}",
+                                        settle_response.error_reason
+                                    );
+
+                                    let payment_response = PaymentResponse::success();
+                                    let encoded = payment_response.to_base64().unwrap_or_default();
+
+                                    let (req, response) = res.into_parts();
+                                    let mut response = response.map_into_left_body();
+
+                                    if let Ok(header_value) = HeaderValue::from_str(&encoded) {
+                                        response.headers_mut().insert(
+                                            HeaderName::from_static("payment-response"),
+                                            header_value,
+                                        );
+                                    }
+
+                                    Ok(ServiceResponse::new(req, response))
+                                }
+                                Err(e) => {
+                                    // Settlement error - but we already processed the request
+                                    // Log the error but still return success since we delivered the service
+                                    error!("Settlement error after request completed: {}", e);
+
+                                    let payment_response = PaymentResponse::success();
+                                    let encoded = payment_response.to_base64().unwrap_or_default();
+
+                                    let (req, response) = res.into_parts();
+                                    let mut response = response.map_into_left_body();
+
+                                    if let Ok(header_value) = HeaderValue::from_str(&encoded) {
+                                        response.headers_mut().insert(
+                                            HeaderName::from_static("payment-response"),
+                                            header_value,
+                                        );
+                                    }
+
+                                    Ok(ServiceResponse::new(req, response))
+                                }
                             }
-
-                            Ok(ServiceResponse::new(req, response))
                         }
                         Ok(verify_response) => {
                             // Payment invalid
