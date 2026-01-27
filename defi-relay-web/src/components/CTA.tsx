@@ -25,7 +25,7 @@ export function CTA() {
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </Link>
               <a
-                href="https://github.com/anthropics/x402"
+                href="https://x402.org"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-8 py-4 rounded-xl bg-slate-800/50 hover:bg-slate-800 text-white font-semibold text-lg transition-all border border-slate-700/50 hover:border-slate-600"

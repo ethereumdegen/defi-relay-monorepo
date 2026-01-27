@@ -51,7 +51,7 @@ export function Footer() {
             <ul className="space-y-2">
               <li>
                 <a
-                  href="https://github.com"
+                  href="https://github.com/ethereumdegen/defi-relay-monorepo"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-slate-400 hover:text-white text-sm transition-colors inline-flex items-center gap-1"
@@ -65,11 +65,18 @@ export function Footer() {
 
         <div className="mt-12 pt-8 border-t border-slate-800/50 flex flex-col sm:flex-row justify-between items-center gap-4">
           <p className="text-slate-500 text-sm">
-            &copy; {new Date().getFullYear()} DefiRelay. Actix.
+            &copy; {new Date().getFullYear()} DefiRelay.
           </p>
           <div className="flex items-center gap-2">
             <span className="badge badge-gray">Base Mainnet</span>
-            <span className="badge badge-relay">x402 v2</span>
+            <a
+              href="https://github.com/x402-rs/x402-rs"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="badge badge-relay hover:opacity-80 transition-opacity"
+            >
+              x402 v2
+            </a>
           </div>
         </div>
       </div>

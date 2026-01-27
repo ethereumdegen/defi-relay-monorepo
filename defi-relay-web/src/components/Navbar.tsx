@@ -11,6 +11,7 @@ export function Navbar() {
     { href: '/#features', label: 'Features' },
     { href: '/#api', label: 'API' },
     { href: '/docs', label: 'Docs' },
+    { href: '/try-it-out', label: 'Try It Out' },
   ]
 
   return (

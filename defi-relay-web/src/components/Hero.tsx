@@ -11,11 +11,15 @@ export function Hero() {
             <span className="w-2 h-2 rounded-full bg-blue-400"></span>
             Base Mainnet
           </span>
-          <span className="badge badge-relay">
+          <a
+            href="https://github.com/x402-rs/x402-rs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="badge badge-relay hover:opacity-80 transition-opacity"
+          >
             <Zap className="w-3 h-3" />
             x402 v2
-          </span>
-          <span className="badge badge-gray">Actix</span>
+          </a>
         </div>
 
         {/* Main headline */}
@@ -31,10 +35,10 @@ export function Hero() {
         {/* CTAs */}
         <div className="flex flex-col sm:flex-row justify-center gap-4 mb-16">
           <Link
-            to="/docs"
+            to="/try-it-out"
             className="group px-8 py-4 rounded-xl bg-relay-500 hover:bg-relay-600 text-white font-semibold text-lg transition-all glow-sm hover:glow inline-flex items-center justify-center gap-2"
           >
-            Try Free
+            Try Now
             <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
           </Link>
           <Link
