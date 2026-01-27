@@ -72,10 +72,10 @@ impl PaymentRequired {
     }
 }
 
-/// EIP-3009 authorization payload (x402 v2 format)
+/// EIP-3009 authorization fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Eip3009Payload {
+pub struct Eip3009Authorization {
     pub from: DomainEthAddress,
     pub to: DomainEthAddress,
     pub value: DomainUint256,
@@ -84,15 +84,35 @@ pub struct Eip3009Payload {
     pub nonce: DomainBytes32,
 }
 
+/// The inner payload containing signature and authorization (v2 exact scheme)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExactEvmPayload {
+    pub signature: String,
+    pub authorization: Eip3009Authorization,
+}
+
+/// Accepted payment requirements (what the client agreed to pay)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptedRequirements {
+    pub scheme: String,
+    pub network: String,
+    pub amount: String,
+    pub pay_to: DomainEthAddress,
+    pub max_timeout_seconds: u64,
+    pub asset: DomainEthAddress,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
+}
+
 /// Payment payload sent by client in X-PAYMENT header (x402 v2 format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaymentPayload {
     pub x402_version: u8,
-    pub scheme: String,
-    pub network: String,
-    pub payload: Eip3009Payload,
-    pub signature: String,
+    pub accepted: AcceptedRequirements,
+    pub payload: ExactEvmPayload,
 }
 
 impl PaymentPayload {
@@ -106,12 +126,27 @@ impl PaymentPayload {
     }
 }
 
-/// Request to facilitator /verify endpoint
+/// Request to facilitator /verify endpoint (x402 v2 format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyRequest {
+    pub x402_version: u8,
     pub payment_payload: PaymentPayload,
-    pub payment_requirements: PaymentRequirements,
+    pub payment_requirements: VerifyPaymentRequirements,
+}
+
+/// Payment requirements format expected by facilitator /verify endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyPaymentRequirements {
+    pub scheme: String,
+    pub network: String,
+    pub amount: String,
+    pub pay_to: DomainEthAddress,
+    pub max_timeout_seconds: u64,
+    pub asset: DomainEthAddress,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
 }
 
 /// Response from facilitator /verify endpoint (x402 v2 format)

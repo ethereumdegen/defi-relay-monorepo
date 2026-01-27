@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::models::{
-    PaymentPayload, PaymentRequired, PaymentRequirements, PaymentResponse,
-    usdc_address, BASE_NETWORK, X402_VERSION,
+    PaymentPayload, PaymentRequired, PaymentResponse, VerifyPaymentRequirements,
+    usdc_address, BASE_NETWORK,
 };
 use crate::services::FacilitatorClient;
 use actix_web::{
@@ -144,17 +144,13 @@ where
                     };
 
                     // Create payment requirements for verification (x402 v2 format)
-                    let payment_requirements = PaymentRequirements {
-                        x402_version: X402_VERSION,
+                    let payment_requirements = VerifyPaymentRequirements {
                         scheme: "exact".to_string(),
                         network: BASE_NETWORK.to_string(),
-                        max_amount_required: config.cost_per_request,
-                        resource: req.path().to_string(),
-                        description: "Chat with Llama agent".to_string(),
-                        pay_to_address: config.bot_wallet_address,
+                        amount: config.cost_per_request.to_string(),
+                        pay_to: config.bot_wallet_address,
                         asset: usdc_address(),
                         max_timeout_seconds: 60,
-                        mime_type: None,
                         extra: None,
                     };
 

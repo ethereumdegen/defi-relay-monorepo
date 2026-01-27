@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::models::{PaymentPayload, PaymentRequirements, VerifyRequest, VerifyResponse};
+use crate::models::{PaymentPayload, VerifyPaymentRequirements, VerifyRequest, VerifyResponse, X402_VERSION};
 use reqwest::Client;
 use tracing::{debug, error, info};
 
@@ -21,11 +21,12 @@ impl FacilitatorClient {
     pub async fn verify(
         &self,
         payment_payload: PaymentPayload,
-        payment_requirements: PaymentRequirements,
+        payment_requirements: VerifyPaymentRequirements,
     ) -> Result<VerifyResponse, AppError> {
         let url = format!("{}/verify", self.base_url);
 
         let request = VerifyRequest {
+            x402_version: X402_VERSION,
             payment_payload,
             payment_requirements,
         };

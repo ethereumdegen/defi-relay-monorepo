@@ -140,20 +140,28 @@ export function TryItOut() {
         message,
       })
 
-      // Create x402 payment payload
+      // Create x402 v2 payment payload
       const paymentPayload = {
         x402Version: 2,
-        scheme: 'exact',
-        network: 'eip155:8453',
-        payload: {
-          from: address,
-          to: requirements.payToAddress,
-          value: requirements.maxAmountRequired,
-          validAfter: '0',
-          validBefore: validBefore.toString(),
-          nonce: nonce,
+        accepted: {
+          scheme: 'exact',
+          network: 'eip155:8453',
+          amount: requirements.maxAmountRequired,
+          payTo: requirements.payToAddress,
+          maxTimeoutSeconds: requirements.maxTimeoutSeconds || 60,
+          asset: requirements.asset,
         },
-        signature,
+        payload: {
+          signature,
+          authorization: {
+            from: address,
+            to: requirements.payToAddress,
+            value: requirements.maxAmountRequired,
+            validAfter: '0',
+            validBefore: validBefore.toString(),
+            nonce: nonce,
+          },
+        },
       }
 
       // Send request with payment
