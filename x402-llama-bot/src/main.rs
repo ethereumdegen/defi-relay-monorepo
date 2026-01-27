@@ -65,6 +65,16 @@ async fn health_handler() -> HttpResponse {
     }))
 }
 
+/// Serve x402 discovery document (handles extensionless file)
+async fn x402_discovery_handler() -> HttpResponse {
+    match fs::read_to_string("public/.well-known/x402") {
+        Ok(content) => HttpResponse::Ok()
+            .content_type("application/json")
+            .body(content),
+        Err(_) => HttpResponse::NotFound().finish(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     // Initialize logging
@@ -147,7 +157,9 @@ async fn main() -> std::io::Result<()> {
             .route("/", web::get().to(root_handler))
             .route("/health", web::get().to(health_handler))
             .route("/agent.json", web::get().to(agent_info_handler))
-            // Serve .well-known directory for x402 discovery
+            // Serve x402 discovery document explicitly (actix-files has issues with extensionless files)
+            .route("/.well-known/x402", web::get().to(x402_discovery_handler))
+            // Serve .well-known directory for other files
             .service(Files::new("/.well-known", "public/.well-known"))
             // Protected endpoints with x402 middleware
             .service(
