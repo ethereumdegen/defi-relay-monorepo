@@ -6,7 +6,9 @@ mod models;
 mod services;
 
 use actix_cors::Cors;
+use actix_files::Files;
 use actix_web::{http::header, web, App, HttpResponse, HttpServer};
+use std::fs;
 use config::Config;
 use handlers::{agent_info_handler, chat_handler};
 use middleware::X402Middleware;
@@ -26,7 +28,8 @@ This bot provides access to a Llama AI agent using the x402 payment protocol.
 ENDPOINTS:
   GET  /                       - This help page
   GET  /health                 - Health check
-  GET  /agent.json             - Agent metadata (x402 discovery)
+  GET  /.well-known/x402       - x402 discovery document
+  GET  /agent.json             - Agent metadata (EIP-8004)
   POST /chat                   - Chat with the Llama agent (payment required)
   POST /api/v1/chat/completions - OpenAI-compatible endpoint (payment required)
 
@@ -85,6 +88,29 @@ async fn main() -> std::io::Result<()> {
     info!("Facilitator URL: {}", config.facilitator_url);
     info!("Cost per request: {} raw USDC", config.cost_per_request);
 
+    // Generate x402 discovery document if BASE_URL is configured
+    if let Some(ref base_url) = config.base_url {
+        let discovery = serde_json::json!({
+            "version": 1,
+            "resources": [
+                format!("{}/chat", base_url),
+                format!("{}/api/v1/chat/completions", base_url)
+            ],
+            "ownershipProofs": [
+                config.bot_wallet_address.to_hex()
+            ]
+        });
+
+        let discovery_path = "public/.well-known/x402";
+        if let Err(e) = fs::write(discovery_path, serde_json::to_string_pretty(&discovery).unwrap()) {
+            error!("Failed to write x402 discovery file: {}", e);
+        } else {
+            info!("Generated x402 discovery document at {}", discovery_path);
+        }
+    } else {
+        info!("BASE_URL not set, skipping x402 discovery document generation");
+    }
+
     // Create service clients
     let facilitator_client = FacilitatorClient::new(&config.facilitator_url);
     let llama_client = LlamaClient::new(&config.do_agent_endpoint, &config.do_agent_secret);
@@ -115,6 +141,8 @@ async fn main() -> std::io::Result<()> {
             .route("/", web::get().to(root_handler))
             .route("/health", web::get().to(health_handler))
             .route("/agent.json", web::get().to(agent_info_handler))
+            // Serve .well-known directory for x402 discovery
+            .service(Files::new("/.well-known", "public/.well-known"))
             // Protected endpoints with x402 middleware
             .service(
                 web::scope("/chat")

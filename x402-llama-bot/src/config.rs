@@ -10,6 +10,7 @@ pub struct Config {
     pub facilitator_url: String,
     pub port: u16,
     pub cost_per_request: DomainUint256,
+    pub base_url: Option<String>,
 }
 
 impl Config {
@@ -40,6 +41,8 @@ impl Config {
         let cost_per_request = DomainUint256::from_str(&cost_per_request)
             .map_err(|e| format!("Invalid COST_PER_REQUEST: {}", e))?;
 
+        let base_url = env::var("BASE_URL").ok();
+
         Ok(Config {
             do_agent_endpoint,
             do_agent_secret,
@@ -47,6 +50,7 @@ impl Config {
             facilitator_url,
             port,
             cost_per_request,
+            base_url,
         })
     }
 }
