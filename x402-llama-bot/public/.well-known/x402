@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "resources": [
+    "https://llama.defirelay.com/chat", 
+  ]
+
+}
