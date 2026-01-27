@@ -5,14 +5,14 @@ pub enum AppError {
     #[error("Facilitator error: {0}")]
     Facilitator(String),
 
-    #[error("Llama agent error: {0}")]
-    LlamaAgent(String),
+    #[error("RPC error: {0}")]
+    Rpc(String),
 
     #[error("Invalid payment: {0}")]
     InvalidPayment(String),
 
-    #[error("Input too large: {0}")]
-    InputTooLarge(String),
+    #[error("Network not found: {0}")]
+    NetworkNotFound(String),
 
     #[error("Internal error: {0}")]
     Internal(String),
@@ -27,11 +27,9 @@ impl ResponseError for AppError {
             AppError::Facilitator(msg) => {
                 HttpResponse::BadGateway().body(format!("Facilitator error: {}", msg))
             }
-            AppError::LlamaAgent(msg) => {
-                HttpResponse::BadGateway().body(format!("Llama agent error: {}", msg))
-            }
-            AppError::InputTooLarge(msg) => {
-                HttpResponse::BadRequest().body(format!("Input too large: {}", msg))
+            AppError::Rpc(msg) => HttpResponse::BadGateway().body(format!("RPC error: {}", msg)),
+            AppError::NetworkNotFound(msg) => {
+                HttpResponse::NotFound().body(format!("Network not found: {}", msg))
             }
             AppError::Internal(msg) => {
                 HttpResponse::InternalServerError().body(format!("Internal error: {}", msg))

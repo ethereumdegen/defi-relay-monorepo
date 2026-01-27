@@ -11,6 +11,7 @@ pub struct Config {
     pub port: u16,
     pub cost_per_request: DomainUint256,
     pub base_url: Option<String>,
+    pub max_input_tokens: u32,
 }
 
 impl Config {
@@ -43,6 +44,11 @@ impl Config {
 
         let base_url = env::var("BASE_URL").ok();
 
+        let max_input_tokens = env::var("MAX_INPUT_TOKENS")
+            .unwrap_or_else(|_| "50000".to_string())
+            .parse::<u32>()
+            .map_err(|_| "MAX_INPUT_TOKENS must be a valid number")?;
+
         Ok(Config {
             do_agent_endpoint,
             do_agent_secret,
@@ -51,6 +57,7 @@ impl Config {
             port,
             cost_per_request,
             base_url,
+            max_input_tokens,
         })
     }
 }

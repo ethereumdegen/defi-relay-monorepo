@@ -98,6 +98,7 @@ async fn main() -> std::io::Result<()> {
     info!("Bot wallet: {}", config.bot_wallet_address);
     info!("Facilitator URL: {}", config.facilitator_url);
     info!("Cost per request: {} raw USDC", config.cost_per_request);
+    info!("Max input tokens: {}", config.max_input_tokens);
 
     // Generate x402 discovery document if BASE_URL is configured
     if let Some(ref base_url) = config.base_url {
@@ -151,7 +152,8 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .wrap(cors)
-            // Share Llama client across handlers
+            // Share config and Llama client across handlers
+            .app_data(web::Data::new(config_for_middleware.clone()))
             .app_data(web::Data::new(llama_client.clone()))
             // Public endpoints (no payment required)
             .route("/", web::get().to(root_handler))
