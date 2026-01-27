@@ -13,6 +13,7 @@ export function Navbar() {
     { href: '/docs', label: 'Docs' },
     { href: '/try-it-out', label: 'Try It Out' },
     { href: '/rpc', label: 'RPC' },
+    { href: '/code', label: 'Code' },
   ]
 
   return (

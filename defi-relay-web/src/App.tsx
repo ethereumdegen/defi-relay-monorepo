@@ -6,6 +6,7 @@ import { Home } from './pages/Home'
 import { Docs } from './pages/Docs'
 import { TryItOut } from './pages/TryItOut'
 import { Rpc } from './pages/Rpc'
+import { Code } from './pages/Code'
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
           <Route path="/docs" element={<Docs />} />
           <Route path="/try-it-out" element={<TryItOut />} />
           <Route path="/rpc" element={<Rpc />} />
+          <Route path="/code" element={<Code />} />
         </Routes>
         <Footer />
       </div>
