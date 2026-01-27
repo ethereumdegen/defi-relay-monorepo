@@ -5,7 +5,8 @@ mod middleware;
 mod models;
 mod services;
 
-use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_cors::Cors;
+use actix_web::{http::header, web, App, HttpResponse, HttpServer};
 use config::Config;
 use handlers::{agent_info_handler, chat_handler};
 use middleware::X402Middleware;
@@ -92,7 +93,21 @@ async fn main() -> std::io::Result<()> {
     let facilitator_for_middleware = facilitator_client.clone();
 
     HttpServer::new(move || {
+        let cors = Cors::default()
+            .allow_any_origin()
+            .allowed_methods(vec!["GET", "POST", "OPTIONS"])
+            .allowed_headers(vec![
+                header::CONTENT_TYPE,
+                header::AUTHORIZATION,
+                header::HeaderName::from_static("x-payment"),
+            ])
+            .expose_headers(vec![
+                header::HeaderName::from_static("payment-required"),
+            ])
+            .max_age(3600);
+
         App::new()
+            .wrap(cors)
             // Share Llama client across handlers
             .app_data(web::Data::new(llama_client.clone()))
             // Public endpoints (no payment required)
