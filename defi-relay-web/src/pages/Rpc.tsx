@@ -245,6 +245,10 @@ export function Rpc() {
             Call Ethereum RPC methods with x402 payments. Connect your wallet, select a network,
             and execute JSON-RPC requests paid with gasless USDC signatures.
           </p>
+          <div className="mt-4 inline-flex items-center gap-2 bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2">
+            <span className="text-slate-400 text-sm">Endpoint:</span>
+            <code className="text-relay-400 font-mono text-sm">https://rpc.defirelay.com</code>
+          </div>
         </div>
 
         {/* Wallet Connection */}
