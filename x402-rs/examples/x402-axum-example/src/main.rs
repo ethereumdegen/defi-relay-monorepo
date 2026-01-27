@@ -1,0 +1,135 @@
+use alloy_primitives::address;
+use axum::Router;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::get;
+use dotenvy::dotenv;
+use solana_pubkey::pubkey;
+use std::env;
+use tracing::instrument;
+use x402_axum::X402Middleware;
+use x402_rs::networks::{KnownNetworkEip155, KnownNetworkSolana, USDC};
+use x402_rs::scheme::v1_eip155_exact::V1Eip155Exact;
+use x402_rs::scheme::v1_solana_exact::V1SolanaExact;
+use x402_rs::scheme::v2_eip155_exact::V2Eip155Exact;
+use x402_rs::scheme::v2_solana_exact::V2SolanaExact;
+use x402_rs::util::Telemetry;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
+
+    let telemetry = Telemetry::new()
+        .with_name(env!("CARGO_PKG_NAME"))
+        .with_version(env!("CARGO_PKG_VERSION"))
+        .register();
+
+    let facilitator_url =
+        env::var("FACILITATOR_URL").unwrap_or("https://facilitator.x402.rs".to_string());
+
+    let x402 = X402Middleware::try_from(facilitator_url)?;
+
+    let app = Router::new()
+        .route(
+            "/static-price-v1",
+            get(my_handler).layer(
+                x402.with_price_tag(V1Eip155Exact::price_tag(
+                    address!("0xBAc675C310721717Cd4A37F6cbeA1F081b1C2a07"),
+                    USDC::base_sepolia().parse("0.01")?,
+                ))
+                .with_price_tag(V1SolanaExact::price_tag(
+                    pubkey!("EGBQqKn968sVv5cQh5Cr72pSTHfxsuzq7o7asqYB5uEV"),
+                    USDC::solana().amount(100),
+                )),
+            ),
+        )
+        .route(
+            "/static-price-v2",
+            get(my_handler).layer(
+                x402.with_price_tag(V2Eip155Exact::price_tag(
+                    address!("0xBAc675C310721717Cd4A37F6cbeA1F081b1C2a07"),
+                    USDC::base_sepolia().amount(10u64),
+                ))
+                .with_price_tag(V2SolanaExact::price_tag(
+                    pubkey!("EGBQqKn968sVv5cQh5Cr72pSTHfxsuzq7o7asqYB5uEV"),
+                    USDC::solana().amount(100),
+                )),
+            ),
+        )
+        // Dynamic pricing: adjust price based on request parameters
+        // GET /dynamic-price-v2 -> 100 units
+        // GET /dynamic-price-v2?discount -> 50 units (discounted)
+        .route(
+            "/dynamic-price-v2",
+            get(my_handler).layer(x402.with_dynamic_price(|_headers, uri, _base_url| {
+                // Check if "discount" query parameter is present (before async block)
+                let has_discount = uri.query().map(|q| q.contains("discount")).unwrap_or(false);
+                let amount: u64 = if has_discount { 50 } else { 100 };
+
+                async move {
+                    vec![
+                        // V2 EIP155 (Base Sepolia) price tag
+                        V2Eip155Exact::price_tag(
+                            address!("0xBAc675C310721717Cd4A37F6cbeA1F081b1C2a07"),
+                            USDC::base_sepolia().amount(amount),
+                        ),
+                        // V2 Solana price tag
+                        V2SolanaExact::price_tag(
+                            pubkey!("EGBQqKn968sVv5cQh5Cr72pSTHfxsuzq7o7asqYB5uEV"),
+                            USDC::solana().amount(amount),
+                        ),
+                    ]
+                }
+            })),
+        )
+        // Conditional free access: bypass payment when "free" query parameter is present
+        // GET /conditional-free-v2 -> requires payment (402)
+        // GET /conditional-free-v2?free -> bypasses payment, returns content directly
+        //
+        // This demonstrates returning an empty price tags vector to skip payment enforcement.
+        // Useful for implementing free tiers, promotional access, or conditional pricing.
+        .route(
+            "/conditional-free-v2",
+            get(my_handler).layer(x402.with_dynamic_price(|_headers, uri, _base_url| {
+                // Check if "free" query parameter is present - if so, bypass payment
+                let is_free = uri.query().map(|q| q.contains("free")).unwrap_or(false);
+
+                async move {
+                    if is_free {
+                        // Return empty vector to bypass payment enforcement entirely.
+                        // The middleware will forward the request directly to the handler
+                        // without requiring any payment.
+                        vec![]
+                    } else {
+                        // Normal pricing - payment required
+                        vec![
+                            V2Eip155Exact::price_tag(
+                                address!("0xBAc675C310721717Cd4A37F6cbeA1F081b1C2a07"),
+                                USDC::base_sepolia().amount(100u64),
+                            ),
+                            V2SolanaExact::price_tag(
+                                pubkey!("EGBQqKn968sVv5cQh5Cr72pSTHfxsuzq7o7asqYB5uEV"),
+                                USDC::solana().amount(100),
+                            ),
+                        ]
+                    }
+                }
+            })),
+        )
+        .layer(telemetry.http_tracing());
+
+    tracing::info!("Using facilitator on {}", x402.facilitator_url());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .expect("Can not start server");
+    tracing::info!("Listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+
+    Ok(())
+}
+
+#[instrument(skip_all)]
+async fn my_handler() -> impl IntoResponse {
+    (StatusCode::OK, "This is a VIP content!")
+}
