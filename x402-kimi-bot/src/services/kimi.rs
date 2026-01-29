@@ -3,22 +3,21 @@ use crate::models::{ChatRequest, ChatResponse};
 use reqwest::Client;
 use tracing::{debug, error, info};
 
-/// Default model for Kimi API
-pub const DEFAULT_KIMI_MODEL: &str = "kimi-k2-turbo-preview";
-
 #[derive(Clone)]
 pub struct KimiClient {
     client: Client,
     endpoint: String,
     api_key: String,
+    default_model: String,
 }
 
 impl KimiClient {
-    pub fn new(endpoint: &str, api_key: &str) -> Self {
+    pub fn new(endpoint: &str, api_key: &str, default_model: &str) -> Self {
         KimiClient {
             client: Client::new(),
             endpoint: endpoint.to_string(),
             api_key: api_key.to_string(),
+            default_model: default_model.to_string(),
         }
     }
 
@@ -27,7 +26,7 @@ impl KimiClient {
         info!("Sending chat request to Kimi API at: {}", self.endpoint);
 
         // Use default model if not specified
-        let model = request.model.as_deref().unwrap_or(DEFAULT_KIMI_MODEL);
+        let model = request.model.as_deref().unwrap_or(&self.default_model);
         info!(
             "Request model: {}, messages: {}",
             model,
@@ -42,7 +41,7 @@ impl KimiClient {
         })?;
 
         if request.model.is_none() {
-            request_body["model"] = serde_json::Value::String(DEFAULT_KIMI_MODEL.to_string());
+            request_body["model"] = serde_json::Value::String(self.default_model.clone());
         }
 
         let response = self

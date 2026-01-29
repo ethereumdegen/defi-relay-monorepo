@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 
 use crate::models::{DomainEthAddress, DomainUint256};
 
@@ -12,6 +13,9 @@ pub struct Config {
     pub cost_per_request: DomainUint256,
     pub base_url: Option<String>,
     pub max_input_tokens: u32,
+    pub default_model: String,
+    pub max_output_tokens: u32,
+    pub system_prompt: Option<String>,
 }
 
 impl Config {
@@ -49,6 +53,20 @@ impl Config {
             .parse::<u32>()
             .map_err(|_| "MAX_INPUT_TOKENS must be a valid number")?;
 
+        let default_model = env::var("KIMI_MODEL")
+            .unwrap_or_else(|_| "kimi-k2.5".to_string());
+
+        let max_output_tokens = env::var("MAX_OUTPUT_TOKENS")
+            .unwrap_or_else(|_| "50000".to_string())
+            .parse::<u32>()
+            .map_err(|_| "MAX_OUTPUT_TOKENS must be a valid number")?;
+
+        // Load system prompt from file if it exists
+        let system_prompt = fs::read_to_string("SYSTEM_PROMPT.md")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
         Ok(Config {
             moonshot_endpoint,
             moonshot_api_key,
@@ -58,6 +76,9 @@ impl Config {
             cost_per_request,
             base_url,
             max_input_tokens,
+            default_model,
+            max_output_tokens,
+            system_prompt,
         })
     }
 }

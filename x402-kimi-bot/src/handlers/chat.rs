@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::error::AppError;
-use crate::models::ChatRequest;
+use crate::models::{ChatMessage, ChatRequest};
 use crate::services::KimiClient;
 use actix_web::{web, HttpResponse};
 use tracing::{debug, info, warn};
@@ -30,8 +30,33 @@ pub async fn chat_handler(
     info!("Processing chat request");
     debug!("Chat request: {:?}", request);
 
+    // Build request with system prompt prepended if configured
+    let mut final_request = request.into_inner();
+
+    // Prepend system prompt if configured and no system message exists
+    if let Some(ref system_prompt) = config.system_prompt {
+        let has_system_message = final_request
+            .messages
+            .iter()
+            .any(|m| m.role == "system");
+
+        if !has_system_message {
+            let system_message = ChatMessage {
+                role: "system".to_string(),
+                content: system_prompt.clone(),
+            };
+            final_request.messages.insert(0, system_message);
+            info!("Prepended system prompt to request");
+        }
+    }
+
+    // Set max_tokens from config if not specified in request
+    if final_request.max_tokens.is_none() {
+        final_request.max_tokens = Some(config.max_output_tokens);
+    }
+
     // Estimate and validate input token count
-    let estimated_tokens = estimate_request_tokens(&request);
+    let estimated_tokens = estimate_request_tokens(&final_request);
     info!("Estimated input tokens: {}", estimated_tokens);
 
     if estimated_tokens > config.max_input_tokens {
@@ -45,7 +70,7 @@ pub async fn chat_handler(
         )));
     }
 
-    let response = kimi_client.chat(&request).await?;
+    let response = kimi_client.chat(&final_request).await?;
 
     debug!("Chat response: {:?}", response);
     info!("Chat request completed successfully");

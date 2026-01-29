@@ -100,6 +100,11 @@ async fn main() -> std::io::Result<()> {
     info!("Moonshot endpoint: {}", config.moonshot_endpoint);
     info!("Cost per request: {} raw USDC", config.cost_per_request);
     info!("Max input tokens: {}", config.max_input_tokens);
+    info!("Max output tokens: {}", config.max_output_tokens);
+    info!("Default model: {}", config.default_model);
+    if config.system_prompt.is_some() {
+        info!("System prompt loaded from SYSTEM_PROMPT.md");
+    }
 
     // Generate x402 discovery document if BASE_URL is configured
     if let Some(ref base_url) = config.base_url {
@@ -126,7 +131,11 @@ async fn main() -> std::io::Result<()> {
 
     // Create service clients
     let facilitator_client = FacilitatorClient::new(&config.facilitator_url);
-    let kimi_client = KimiClient::new(&config.moonshot_endpoint, &config.moonshot_api_key);
+    let kimi_client = KimiClient::new(
+        &config.moonshot_endpoint,
+        &config.moonshot_api_key,
+        &config.default_model,
+    );
 
     // Create nonce tracker for replay protection (10 minute TTL)
     let nonce_tracker = Arc::new(NonceTracker::with_default_ttl());
