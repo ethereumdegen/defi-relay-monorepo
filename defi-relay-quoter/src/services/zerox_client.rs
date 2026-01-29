@@ -2,7 +2,7 @@ use crate::error::AppError;
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 /// Client for forwarding requests to 0x swap API
 #[derive(Clone)]
@@ -29,7 +29,7 @@ impl ZeroXClient {
     /// Forward a request to a 0x swap API endpoint
     async fn forward_request(&self, path: &str, query_string: &str) -> Result<Value, AppError> {
         let url = format!("{}/{}?{}", self.base_url, path, query_string);
-        debug!("Forwarding request to 0x: {}", url);
+        info!("0x API request: GET {}", url);
 
         let response = self
             .client
@@ -44,10 +44,10 @@ impl ZeroXClient {
             })?;
 
         let status = response.status();
-        info!("0x API response status: {}", status);
 
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            info!("0x API response: status={}, body={}", status, body);
             error!("0x API returned error: {} - {}", status, body);
             return Err(AppError::ZeroX(format!(
                 "0x API returned {}: {}",
@@ -55,12 +55,18 @@ impl ZeroXClient {
             )));
         }
 
-        let result: Value = response.json().await.map_err(|e| {
+        let body = response.text().await.map_err(|e| {
+            error!("Failed to read 0x response body: {}", e);
+            AppError::ZeroX(format!("Failed to read 0x response: {}", e))
+        })?;
+
+        info!("0x API response: status={}, body={}", status, body);
+
+        let result: Value = serde_json::from_str(&body).map_err(|e| {
             error!("Failed to parse 0x response: {}", e);
             AppError::ZeroX(format!("Invalid 0x response: {}", e))
         })?;
 
-        debug!("0x response received successfully");
         Ok(result)
     }
 

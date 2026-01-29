@@ -2,7 +2,7 @@ use crate::error::AppError;
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
-use tracing::{debug, error};
+use tracing::{error, info};
 
 /// Client for forwarding JSON-RPC requests to upstream EVM nodes
 #[derive(Clone)]
@@ -26,7 +26,7 @@ impl RpcClient {
 
     /// Forward a JSON-RPC request to the upstream node
     pub async fn forward(&self, request: Value) -> Result<Value, AppError> {
-        debug!("Forwarding RPC request to {}", self.endpoint);
+        info!("RPC request to {}: {}", self.endpoint, request);
 
         let response = self
             .client
@@ -51,6 +51,8 @@ impl RpcClient {
             error!("Failed to parse RPC response: {}", e);
             AppError::Rpc(format!("Invalid RPC response: {}", e))
         })?;
+
+        info!("RPC response: {}", result);
 
         Ok(result)
     }
