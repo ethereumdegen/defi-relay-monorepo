@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::models::{ChatRequest, ChatResponse};
 use reqwest::Client;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct KimiClient {
@@ -32,7 +32,6 @@ impl KimiClient {
             model,
             request.messages.len()
         );
-        debug!("Full request: {:?}", request);
 
         // Build request with default model if not specified
         let mut request_body = serde_json::to_value(request).map_err(|e| {
@@ -43,6 +42,12 @@ impl KimiClient {
         if request.model.is_none() {
             request_body["model"] = serde_json::Value::String(self.default_model.clone());
         }
+
+        // Log the full request being sent to Kimi API
+        info!(
+            ">>> KIMI API REQUEST:\n{}",
+            serde_json::to_string_pretty(&request_body).unwrap_or_else(|_| format!("{:?}", request_body))
+        );
 
         let response = self
             .client
@@ -72,6 +77,12 @@ impl KimiClient {
             AppError::KimiAgent(format!("Invalid response: {}", e))
         })?;
 
+        // Log the full response from Kimi API
+        info!(
+            "<<< KIMI API RESPONSE:\n{}",
+            serde_json::to_string_pretty(&chat_response).unwrap_or_else(|_| format!("{:?}", chat_response))
+        );
+
         info!(
             "Kimi response received - model: {}, choices: {}",
             chat_response.model,
@@ -83,7 +94,6 @@ impl KimiClient {
                 usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
             );
         }
-        debug!("Full response: {:?}", chat_response);
 
         Ok(chat_response)
     }
