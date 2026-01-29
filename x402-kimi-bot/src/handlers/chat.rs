@@ -16,7 +16,10 @@ fn estimate_request_tokens(request: &ChatRequest) -> u32 {
     request
         .messages
         .iter()
-        .map(|msg| estimate_tokens(&msg.role) + estimate_tokens(&msg.content))
+        .map(|msg| {
+            estimate_tokens(&msg.role)
+                + msg.content.as_deref().map(estimate_tokens).unwrap_or(0)
+        })
         .sum()
 }
 
@@ -41,11 +44,7 @@ pub async fn chat_handler(
             .any(|m| m.role == "system");
 
         if !has_system_message {
-            let system_message = ChatMessage {
-                role: "system".to_string(),
-                content: system_prompt.clone(),
-            };
-            final_request.messages.insert(0, system_message);
+            final_request.messages.insert(0, ChatMessage::system(system_prompt));
             info!("Prepended system prompt to request");
         }
     }
