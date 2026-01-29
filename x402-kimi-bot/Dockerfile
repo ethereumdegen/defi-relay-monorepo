@@ -20,10 +20,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/x402-llama-bot /usr/local/bin/x402-llama-bot
+COPY --from=builder /app/target/release/x402-kimi-bot /usr/local/bin/x402-kimi-bot
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/SYSTEM_PROMPT.md ./SYSTEM_PROMPT.md
 
 EXPOSE $PORT
 ENV RUST_LOG=info
 
-ENTRYPOINT ["x402-llama-bot"]
+ENTRYPOINT ["x402-kimi-bot"]
