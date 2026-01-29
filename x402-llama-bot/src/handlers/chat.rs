@@ -16,7 +16,10 @@ fn estimate_request_tokens(request: &ChatRequest) -> u32 {
     request
         .messages
         .iter()
-        .map(|msg| estimate_tokens(&msg.role) + estimate_tokens(&msg.content))
+        .map(|msg| {
+            estimate_tokens(&msg.role)
+                + msg.content.as_deref().map(estimate_tokens).unwrap_or(0)
+        })
         .sum()
 }
 

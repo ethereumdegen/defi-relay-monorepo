@@ -88,6 +88,21 @@ impl KimiClient {
             chat_response.model,
             chat_response.choices.len()
         );
+
+        // Log tool calls prominently
+        for choice in &chat_response.choices {
+            if let Some(ref tool_calls) = choice.message.tool_calls {
+                for tc in tool_calls {
+                    info!(
+                        ">>> TOOL CALL: {} | id: {} | args: {}",
+                        tc.function.name,
+                        tc.id,
+                        tc.function.arguments
+                    );
+                }
+            }
+        }
+
         if let Some(usage) = &chat_response.usage {
             info!(
                 "Token usage - prompt: {}, completion: {}, total: {}",

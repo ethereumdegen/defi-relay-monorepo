@@ -27,7 +27,12 @@ impl LlamaClient {
             request.model.as_deref().unwrap_or("default"),
             request.messages.len()
         );
-        debug!("Full request: {:?}", request);
+
+        // Log the full request
+        info!(
+            ">>> LLAMA API REQUEST:\n{}",
+            serde_json::to_string_pretty(&request).unwrap_or_else(|_| format!("{:?}", request))
+        );
 
         let response = self
             .client
@@ -57,18 +62,38 @@ impl LlamaClient {
             AppError::LlamaAgent(format!("Invalid response: {}", e))
         })?;
 
+        // Log the full response
+        info!(
+            "<<< LLAMA API RESPONSE:\n{}",
+            serde_json::to_string_pretty(&chat_response).unwrap_or_else(|_| format!("{:?}", chat_response))
+        );
+
         info!(
             "Llama response received - model: {}, choices: {}",
             chat_response.model,
             chat_response.choices.len()
         );
+
+        // Log tool calls prominently
+        for choice in &chat_response.choices {
+            if let Some(ref tool_calls) = choice.message.tool_calls {
+                for tc in tool_calls {
+                    info!(
+                        ">>> TOOL CALL: {} | id: {} | args: {}",
+                        tc.function.name,
+                        tc.id,
+                        tc.function.arguments
+                    );
+                }
+            }
+        }
+
         if let Some(usage) = &chat_response.usage {
             info!(
                 "Token usage - prompt: {}, completion: {}, total: {}",
                 usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
             );
         }
-        debug!("Full response: {:?}", chat_response);
 
         Ok(chat_response)
     }
