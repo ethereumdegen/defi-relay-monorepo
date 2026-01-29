@@ -37,22 +37,64 @@ pub async fn x402_discovery_handler(req: HttpRequest, config: web::Data<Config>)
         ],
         "resources": [
             {
-                "url": format!("{}/swap/permit2/quote", base_url),
-                "description": "0x swap permit2 quote endpoint - returns swap quotes for any supported chain",
+                "url": format!("{}/swap/permit2/price", base_url),
+                "description": "0x permit2 indicative price - lightweight price check",
                 "mimeType": "application/json",
                 "pricing": {
-                    "amount": config.cost_per_request.to_string(),
+                    "amount": config.cost_per_price.to_string(),
+                    "asset": USDC_BASE_ADDRESS,
+                    "network": BASE_NETWORK
+                }
+            },
+            {
+                "url": format!("{}/swap/permit2/quote", base_url),
+                "description": "0x permit2 full quote - includes transaction data for execution",
+                "mimeType": "application/json",
+                "pricing": {
+                    "amount": config.cost_per_quote.to_string(),
+                    "asset": USDC_BASE_ADDRESS,
+                    "network": BASE_NETWORK
+                }
+            },
+            {
+                "url": format!("{}/swap/allowance-holder/price", base_url),
+                "description": "0x allowance-holder indicative price - lightweight price check (recommended)",
+                "mimeType": "application/json",
+                "pricing": {
+                    "amount": config.cost_per_price.to_string(),
+                    "asset": USDC_BASE_ADDRESS,
+                    "network": BASE_NETWORK
+                }
+            },
+            {
+                "url": format!("{}/swap/allowance-holder/quote", base_url),
+                "description": "0x allowance-holder full quote - single signature, better UX (recommended)",
+                "mimeType": "application/json",
+                "pricing": {
+                    "amount": config.cost_per_quote.to_string(),
                     "asset": USDC_BASE_ADDRESS,
                     "network": BASE_NETWORK
                 }
             }
         ],
+        "tiers": {
+            "price": {
+                "amount": config.cost_per_price.to_string(),
+                "description": "Indicative price - lightweight, read-only",
+                "endpoints": ["/swap/permit2/price", "/swap/allowance-holder/price"]
+            },
+            "quote": {
+                "amount": config.cost_per_quote.to_string(),
+                "description": "Full quote with transaction data for execution",
+                "endpoints": ["/swap/permit2/quote", "/swap/allowance-holder/quote"]
+            }
+        },
         "extensions": {
             "0x-swap": {
                 "info": {
                     "input": {
                         "method": "GET",
-                        "path": "/swap/permit2/quote",
+                        "path": "/swap/allowance-holder/quote",
                         "queryParams": {
                             "chainId": "1",
                             "sellToken": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -61,10 +103,24 @@ pub async fn x402_discovery_handler(req: HttpRequest, config: web::Data<Config>)
                             "taker": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
                         }
                     },
-                    "output": "0x swap quote response with permit2 transaction data"
+                    "output": "0x swap quote response with transaction data"
                 },
-                "requiredParams": ["chainId", "sellToken", "buyToken", "sellAmount", "taker"],
-                "supportedChains": [1, 8453, 42161, 10, 137, 43114, 56]
+                "requiredParams": ["chainId", "sellToken", "buyToken", "taker"],
+                "amountParams": "One of: sellAmount OR buyAmount",
+                "optionalParams": ["slippageBps", "excludedSources", "includedSources"],
+                "supportedChains": [1, 8453, 42161, 10, 137, 43114, 56],
+                "methods": {
+                    "permit2": {
+                        "description": "Requires Permit2 approval, universal standard with shared approvals",
+                        "price": "/swap/permit2/price",
+                        "quote": "/swap/permit2/quote"
+                    },
+                    "allowanceHolder": {
+                        "description": "Single signature, better UX, lower gas - recommended for most use cases",
+                        "price": "/swap/allowance-holder/price",
+                        "quote": "/swap/allowance-holder/quote"
+                    }
+                }
             }
         }
     });

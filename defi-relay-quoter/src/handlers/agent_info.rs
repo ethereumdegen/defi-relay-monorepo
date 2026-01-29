@@ -25,12 +25,33 @@ pub async fn agent_info_handler(req: HttpRequest, config: web::Data<Config>) -> 
     let agent_info = json!({
         "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
         "name": "defi-relay-quoter",
-        "description": "Pay-per-use 0x swap quotes via x402 - get permit2 swap quotes for any supported chain",
+        "description": "Pay-per-use 0x swap API via x402 - get swap prices and quotes for any supported chain",
         "services": [
             {
-                "name": "0x-swap-quote",
-                "description": format!("Get 0x swap permit2 quotes ({} raw USDC/request)", config.cost_per_request),
+                "name": "0x-permit2-price",
+                "description": format!("Get 0x permit2 indicative price ({} raw USDC/request)", config.cost_per_price),
+                "endpoint": format!("{}/swap/permit2/price", base_url),
+                "version": "v2",
+                "methods": ["GET"]
+            },
+            {
+                "name": "0x-permit2-quote",
+                "description": format!("Get 0x permit2 full quote ({} raw USDC/request)", config.cost_per_quote),
                 "endpoint": format!("{}/swap/permit2/quote", base_url),
+                "version": "v2",
+                "methods": ["GET"]
+            },
+            {
+                "name": "0x-allowance-holder-price",
+                "description": format!("Get 0x allowance-holder indicative price ({} raw USDC/request) - recommended", config.cost_per_price),
+                "endpoint": format!("{}/swap/allowance-holder/price", base_url),
+                "version": "v2",
+                "methods": ["GET"]
+            },
+            {
+                "name": "0x-allowance-holder-quote",
+                "description": format!("Get 0x allowance-holder full quote ({} raw USDC/request) - recommended", config.cost_per_quote),
+                "endpoint": format!("{}/swap/allowance-holder/quote", base_url),
                 "version": "v2",
                 "methods": ["GET"]
             }
@@ -39,11 +60,17 @@ pub async fn agent_info_handler(req: HttpRequest, config: web::Data<Config>) -> 
         "active": true,
         "supportedTrust": ["reputation"],
         "pricing": {
-            "quote": {
-                "amount": config.cost_per_request.to_string(),
+            "price": {
+                "amount": config.cost_per_price.to_string(),
                 "asset": "USDC",
                 "network": "Base",
-                "description": "Per quote request"
+                "description": "Indicative price (lightweight)"
+            },
+            "quote": {
+                "amount": config.cost_per_quote.to_string(),
+                "asset": "USDC",
+                "network": "Base",
+                "description": "Full quote with transaction data"
             }
         }
     });

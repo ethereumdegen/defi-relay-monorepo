@@ -6,7 +6,8 @@ pub struct Config {
     pub wallet_address: DomainEthAddress,
     pub facilitator_url: String,
     pub port: u16,
-    pub cost_per_request: DomainUint256,
+    pub cost_per_price: DomainUint256,
+    pub cost_per_quote: DomainUint256,
     #[allow(dead_code)] // Reserved for future use in discovery documents
     pub base_url: Option<String>,
     pub zerox_api_key: String,
@@ -30,11 +31,17 @@ impl Config {
             .parse::<u16>()
             .map_err(|_| "PORT must be a valid port number")?;
 
-        // Default to 1000 raw USDC per request
-        let cost_per_request =
-            env::var("COST_PER_REQUEST").unwrap_or_else(|_| "1000".to_string());
-        let cost_per_request = DomainUint256::from_str(&cost_per_request)
-            .map_err(|e| format!("Invalid COST_PER_REQUEST: {}", e))?;
+        // Default to 500 raw USDC for price (indicative)
+        let cost_per_price =
+            env::var("COST_PER_PRICE").unwrap_or_else(|_| "500".to_string());
+        let cost_per_price = DomainUint256::from_str(&cost_per_price)
+            .map_err(|e| format!("Invalid COST_PER_PRICE: {}", e))?;
+
+        // Default to 1000 raw USDC for quote (full quote)
+        let cost_per_quote =
+            env::var("COST_PER_QUOTE").unwrap_or_else(|_| "1000".to_string());
+        let cost_per_quote = DomainUint256::from_str(&cost_per_quote)
+            .map_err(|e| format!("Invalid COST_PER_QUOTE: {}", e))?;
 
         let base_url = env::var("BASE_URL").ok();
 
@@ -48,7 +55,8 @@ impl Config {
             wallet_address,
             facilitator_url,
             port,
-            cost_per_request,
+            cost_per_price,
+            cost_per_quote,
             base_url,
             zerox_api_key,
             zerox_base_url,

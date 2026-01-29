@@ -26,10 +26,10 @@ impl ZeroXClient {
         }
     }
 
-    /// Forward a quote request to the 0x swap API
-    pub async fn get_quote(&self, query_string: &str) -> Result<Value, AppError> {
-        let url = format!("{}/swap/permit2/quote?{}", self.base_url, query_string);
-        debug!("Forwarding quote request to 0x: {}", url);
+    /// Forward a request to a 0x swap API endpoint
+    async fn forward_request(&self, path: &str, query_string: &str) -> Result<Value, AppError> {
+        let url = format!("{}/{}?{}", self.base_url, path, query_string);
+        debug!("Forwarding request to 0x: {}", url);
 
         let response = self
             .client
@@ -60,7 +60,27 @@ impl ZeroXClient {
             AppError::ZeroX(format!("Invalid 0x response: {}", e))
         })?;
 
-        debug!("0x quote received successfully");
+        debug!("0x response received successfully");
         Ok(result)
+    }
+
+    /// Get permit2 price (indicative, read-only)
+    pub async fn get_permit2_price(&self, query_string: &str) -> Result<Value, AppError> {
+        self.forward_request("swap/permit2/price", query_string).await
+    }
+
+    /// Get permit2 quote (full quote with transaction data)
+    pub async fn get_permit2_quote(&self, query_string: &str) -> Result<Value, AppError> {
+        self.forward_request("swap/permit2/quote", query_string).await
+    }
+
+    /// Get allowance-holder price (indicative, read-only)
+    pub async fn get_allowance_holder_price(&self, query_string: &str) -> Result<Value, AppError> {
+        self.forward_request("swap/allowance-holder/price", query_string).await
+    }
+
+    /// Get allowance-holder quote (full quote with transaction data)
+    pub async fn get_allowance_holder_quote(&self, query_string: &str) -> Result<Value, AppError> {
+        self.forward_request("swap/allowance-holder/quote", query_string).await
     }
 }

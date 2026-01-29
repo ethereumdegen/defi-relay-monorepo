@@ -18,6 +18,7 @@ use tracing::{debug, error, info, warn};
 const X_PAYMENT_HEADER: &str = "X-PAYMENT";
 const PAYMENT_REQUIRED_HEADER: &str = "PAYMENT-REQUIRED";
 
+#[derive(Clone)]
 pub struct X402Middleware {
     wallet_address: DomainEthAddress,
     cost: DomainUint256,
