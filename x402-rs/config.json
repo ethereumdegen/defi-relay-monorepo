@@ -3,18 +3,29 @@
   "host": "0.0.0.0",
   "chains": {
     "eip155:8453": {
-      "_comment": "Base",
+      "_comment": "Base - uses https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}",
       "eip1559": true,
       "flashblocks": true,
       "signers": ["$EVM_PRIVATE_KEY"],
       "rpc": [
         {
-          "http": "$BASE_RPC_URL" ,
+          "http": "https://base-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY",
+          "rate_limit": 50
+        }
+      ]
+    },
+    "eip155:1": {
+      "_comment": "Ethereum Mainnet - uses https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}",
+      "eip1559": true,
+      "flashblocks": false,
+      "signers": ["$EVM_PRIVATE_KEY"],
+      "rpc": [
+        {
+          "http": "https://eth-mainnet.g.alchemy.com/v2/$ALCHEMY_API_KEY",
           "rate_limit": 50
         }
       ]
     }
-    
   },
   "schemes": [
       {

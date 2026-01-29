@@ -103,50 +103,106 @@ impl Config {
     }
 }
 
-/// Load network RPC endpoints from environment variables.
-/// Looks for variables like MAINNET_RPC_URL, BASE_RPC_URL, ARBITRUM_RPC_URL, etc.
+/// Get Alchemy RPC URL for a network
+/// Returns (network_name, alchemy_url) if the network is supported by Alchemy
+fn alchemy_url_for_network(network: &str, api_key: &str) -> Option<(String, String)> {
+    let (name, slug) = match network {
+        "mainnet" => ("mainnet", "eth-mainnet"),
+        "base" => ("base", "base-mainnet"),
+        "arbitrum" => ("arbitrum", "arb-mainnet"),
+        "optimism" => ("optimism", "opt-mainnet"),
+        "polygon" => ("polygon", "polygon-mainnet"),
+        "sepolia" => ("sepolia", "eth-sepolia"),
+        "base-sepolia" => ("base-sepolia", "base-sepolia"),
+        "arbitrum-sepolia" => ("arbitrum-sepolia", "arb-sepolia"),
+        _ => return None,
+    };
+
+    let url = format!("https://{}.g.alchemy.com/v2/{}", slug, api_key);
+    Some((name.to_string(), url))
+}
+
+/// Load network RPC endpoints using ALCHEMY_API_KEY.
+/// Automatically registers all supported Alchemy networks.
 pub fn load_networks_from_env() -> NetworkRegistry {
     dotenvy::dotenv().ok();
 
     let mut registry = NetworkRegistry::new();
 
-    // Known network suffixes to look for
-    let known_networks = [
-        "MAINNET",
-        "BASE",
-        "ARBITRUM",
-        "OPTIMISM",
-        "POLYGON",
-        "AVALANCHE",
-        "BSC",
-        "FANTOM",
-        "GNOSIS",
-        "SEPOLIA",
-        "GOERLI",
-        "HOLESKY",
-        "BASE_SEPOLIA",
-        "ARBITRUM_SEPOLIA",
-    ];
+    // Check for ALCHEMY_API_KEY first (preferred method)
+    if let Ok(api_key) = env::var("ALCHEMY_API_KEY") {
+        tracing::info!("Using ALCHEMY_API_KEY for RPC endpoints");
 
-    for network in known_networks {
-        let env_var = format!("{}_RPC_URL", network);
-        if let Ok(url) = env::var(&env_var) {
-            let network_name = network.to_lowercase().replace('_', "-");
-            tracing::info!("Registered network: {} -> {}", network_name, url);
-            registry.register(&network_name, RpcClient::new(&url));
+        let networks = [
+            "mainnet",
+            "base",
+            "arbitrum",
+            "optimism",
+            "polygon",
+            "sepolia",
+            "base-sepolia",
+            "arbitrum-sepolia",
+        ];
+
+        for network in networks {
+            if let Some((name, url)) = alchemy_url_for_network(network, &api_key) {
+                tracing::info!("Registered network: {} -> https://{}.g.alchemy.com/v2/***", name,
+                    match network {
+                        "mainnet" => "eth-mainnet",
+                        "base" => "base-mainnet",
+                        "arbitrum" => "arb-mainnet",
+                        "optimism" => "opt-mainnet",
+                        "polygon" => "polygon-mainnet",
+                        "sepolia" => "eth-sepolia",
+                        "base-sepolia" => "base-sepolia",
+                        "arbitrum-sepolia" => "arb-sepolia",
+                        _ => "unknown",
+                    }
+                );
+                registry.register(&name, RpcClient::new(&url));
+            }
         }
-    }
+    } else {
+        // Fallback: Look for individual *_RPC_URL environment variables
+        tracing::warn!("ALCHEMY_API_KEY not set, falling back to individual *_RPC_URL variables");
 
-    // Also scan for any *_RPC_URL environment variables we might have missed
-    for (key, value) in env::vars() {
-        if key.ends_with("_RPC_URL") && !key.starts_with("_") {
-            let network_name = key
-                .trim_end_matches("_RPC_URL")
-                .to_lowercase()
-                .replace('_', "-");
-            if registry.get(&network_name).is_none() {
-                tracing::info!("Registered network: {} -> {}", network_name, value);
-                registry.register(&network_name, RpcClient::new(&value));
+        let known_networks = [
+            "MAINNET",
+            "BASE",
+            "ARBITRUM",
+            "OPTIMISM",
+            "POLYGON",
+            "AVALANCHE",
+            "BSC",
+            "FANTOM",
+            "GNOSIS",
+            "SEPOLIA",
+            "GOERLI",
+            "HOLESKY",
+            "BASE_SEPOLIA",
+            "ARBITRUM_SEPOLIA",
+        ];
+
+        for network in known_networks {
+            let env_var = format!("{}_RPC_URL", network);
+            if let Ok(url) = env::var(&env_var) {
+                let network_name = network.to_lowercase().replace('_', "-");
+                tracing::info!("Registered network: {} -> {}", network_name, url);
+                registry.register(&network_name, RpcClient::new(&url));
+            }
+        }
+
+        // Also scan for any *_RPC_URL environment variables we might have missed
+        for (key, value) in env::vars() {
+            if key.ends_with("_RPC_URL") && !key.starts_with("_") {
+                let network_name = key
+                    .trim_end_matches("_RPC_URL")
+                    .to_lowercase()
+                    .replace('_', "-");
+                if registry.get(&network_name).is_none() {
+                    tracing::info!("Registered network: {} -> {}", network_name, value);
+                    registry.register(&network_name, RpcClient::new(&value));
+                }
             }
         }
     }

@@ -139,6 +139,47 @@ impl<T> LiteralOrEnv<T> {
             None
         }
     }
+
+    /// Expand all environment variables in a string.
+    /// Supports both `$VAR` and `${VAR}` syntax embedded anywhere in the string.
+    /// Returns the string with all env vars replaced, or an error if any var is missing.
+    fn expand_env_vars(s: &str) -> Result<String, String> {
+        let mut result = String::new();
+        let mut chars = s.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '$' {
+                if chars.peek() == Some(&'{') {
+                    // ${VAR} syntax
+                    chars.next(); // consume '{'
+                    let var_name: String = chars.by_ref().take_while(|&c| c != '}').collect();
+                    if var_name.is_empty() {
+                        return Err("Empty variable name in ${} syntax".to_string());
+                    }
+                    let value = std::env::var(&var_name)
+                        .map_err(|_| format!("Environment variable '{}' not found", var_name))?;
+                    result.push_str(&value);
+                } else {
+                    // $VAR syntax - read until non-alphanumeric/underscore
+                    let var_name: String = chars
+                        .by_ref()
+                        .take_while(|&c| c.is_alphanumeric() || c == '_')
+                        .collect();
+                    if var_name.is_empty() {
+                        result.push('$'); // literal $ followed by non-var char
+                    } else {
+                        let value = std::env::var(&var_name)
+                            .map_err(|_| format!("Environment variable '{}' not found", var_name))?;
+                        result.push_str(&value);
+                    }
+                }
+            } else {
+                result.push(c);
+            }
+        }
+
+        Ok(result)
+    }
 }
 
 impl<T> Deref for LiteralOrEnv<T> {
@@ -166,12 +207,20 @@ where
     {
         let s = String::deserialize(deserializer)?;
 
-        // Check if it's an environment variable reference
+        // Check if it's a simple environment variable reference (entire string is $VAR)
         let value = if let Some(var_name) = Self::parse_env_var_syntax(&s) {
             std::env::var(&var_name).map_err(|_| {
                 serde::de::Error::custom(format!(
                     "Environment variable '{}' not found (referenced as '{}')",
                     var_name, s
+                ))
+            })?
+        } else if s.contains('$') {
+            // String contains embedded env vars - expand them
+            Self::expand_env_vars(&s).map_err(|e| {
+                serde::de::Error::custom(format!(
+                    "Failed to expand environment variables in '{}': {}",
+                    s, e
                 ))
             })?
         } else {
