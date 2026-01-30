@@ -424,6 +424,9 @@ impl Eip155ChainConfig {
     pub fn receipt_timeout_secs(&self) -> u64 {
         self.inner.receipt_timeout_secs
     }
+    pub fn gas_price_multiplier(&self) -> f64 {
+        self.inner.gas_price_multiplier
+    }
     pub fn signers(&self) -> &Eip155SignersConfig {
         &self.inner.signers
     }
@@ -482,6 +485,10 @@ pub struct Eip155ChainConfigInner {
     /// How long to wait till the transaction receipt is available (optional)
     #[serde(default = "eip155_chain_config::default_receipt_timeout_secs")]
     pub receipt_timeout_secs: u64,
+    /// Gas price multiplier as a buffer (e.g., 1.1 = 10% higher gas prices).
+    /// Applied to both legacy gas prices and EIP-1559 fees. Default is 1.0 (no buffer).
+    #[serde(default = "eip155_chain_config::default_gas_price_multiplier")]
+    pub gas_price_multiplier: f64,
 }
 
 mod eip155_chain_config {
@@ -493,6 +500,9 @@ mod eip155_chain_config {
     }
     pub fn default_receipt_timeout_secs() -> u64 {
         30
+    }
+    pub fn default_gas_price_multiplier() -> f64 {
+        1.0
     }
 }
 

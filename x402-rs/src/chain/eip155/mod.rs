@@ -322,6 +322,8 @@ pub struct Eip155ChainProvider {
     eip1559: bool,
     flashblocks: bool,
     receipt_timeout_secs: u64,
+    /// Gas price multiplier for adding a buffer (e.g., 1.1 = 10% higher).
+    gas_price_multiplier: f64,
     inner: InnerProvider,
     /// Available signer addresses for round-robin selection.
     signer_addresses: Arc<Vec<Address>>,
@@ -439,13 +441,15 @@ impl FromConfig<Eip155ChainConfig> for Eip155ChainProvider {
             .wallet(wallet)
             .connect_client(client);
 
-        tracing::info!(chain=%config.chain_id(), signers=?signer_addresses, "Using EVM provider");
+        let gas_price_multiplier = config.gas_price_multiplier();
+        tracing::info!(chain=%config.chain_id(), signers=?signer_addresses, gas_price_multiplier, "Using EVM provider");
 
         Ok(Self {
             chain: config.chain_reference(),
             eip1559: config.eip1559(),
             flashblocks: config.flashblocks(),
             receipt_timeout_secs: config.receipt_timeout_secs(),
+            gas_price_multiplier,
             inner,
             signer_addresses,
             signer_cursor,
@@ -513,13 +517,27 @@ impl Eip155MetaTransactionProvider for Eip155ChainProvider {
             .with_from(from_address)
             .with_input(tx.calldata);
 
-        if !self.eip1559 {
-            let provider = &self.inner;
+        let provider = &self.inner;
+        let multiplier = self.gas_price_multiplier;
+
+        if self.eip1559 {
+            // For EIP-1559, fetch and apply multiplier to max fees
+            let (max_fee, max_priority_fee) = provider
+                .estimate_eip1559_fees(None)
+                .instrument(tracing::info_span!("estimate_eip1559_fees"))
+                .await?;
+            let adjusted_max_fee = ((max_fee as f64) * multiplier) as u128;
+            let adjusted_priority_fee = ((max_priority_fee as f64) * multiplier) as u128;
+            txr.set_max_fee_per_gas(adjusted_max_fee);
+            txr.set_max_priority_fee_per_gas(adjusted_priority_fee);
+        } else {
+            // For legacy, fetch and apply multiplier to gas price
             let gas: u128 = provider
                 .get_gas_price()
                 .instrument(tracing::info_span!("get_gas_price"))
                 .await?;
-            txr.set_gas_price(gas);
+            let adjusted_gas = ((gas as f64) * multiplier) as u128;
+            txr.set_gas_price(adjusted_gas);
         }
 
         // Estimate gas if not provided
