@@ -3,7 +3,7 @@ use crate::models::{
     PaymentPayload, PaymentRequired, PaymentResponse, VerifyPaymentRequirements,
     usdc_address, BASE_NETWORK,
 };
-use crate::services::{FacilitatorClient, NonceTracker};
+use crate::services::{FacilitatorClient, NonceTracker, PendingSettlement, SettlementQueue};
 use actix_web::{
     body::EitherBody,
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
@@ -22,14 +22,21 @@ pub struct X402Middleware {
     config: Config,
     facilitator: FacilitatorClient,
     nonce_tracker: Arc<NonceTracker>,
+    settlement_queue: Arc<SettlementQueue>,
 }
 
 impl X402Middleware {
-    pub fn new(config: Config, facilitator: FacilitatorClient, nonce_tracker: Arc<NonceTracker>) -> Self {
+    pub fn new(
+        config: Config,
+        facilitator: FacilitatorClient,
+        nonce_tracker: Arc<NonceTracker>,
+        settlement_queue: Arc<SettlementQueue>,
+    ) -> Self {
         X402Middleware {
             config,
             facilitator,
             nonce_tracker,
+            settlement_queue,
         }
     }
 }
@@ -52,6 +59,7 @@ where
             config: self.config.clone(),
             facilitator: self.facilitator.clone(),
             nonce_tracker: self.nonce_tracker.clone(),
+            settlement_queue: self.settlement_queue.clone(),
         }))
     }
 }
@@ -61,6 +69,7 @@ pub struct X402MiddlewareService<S> {
     config: Config,
     facilitator: FacilitatorClient,
     nonce_tracker: Arc<NonceTracker>,
+    settlement_queue: Arc<SettlementQueue>,
 }
 
 impl<S, B> Service<ServiceRequest> for X402MiddlewareService<S>
@@ -80,6 +89,7 @@ where
         let config = self.config.clone();
         let facilitator = self.facilitator.clone();
         let nonce_tracker = self.nonce_tracker.clone();
+        let settlement_queue = self.settlement_queue.clone();
 
         Box::pin(async move {
             // Check for X-PAYMENT header
@@ -177,9 +187,9 @@ where
                         extra: None,
                     };
 
-                    // Clone payment data for use in both verify and settle
-                    let payment_payload_for_settle = payment_payload.clone();
-                    let payment_requirements_for_settle = payment_requirements.clone();
+                    // Clone payment data for queuing settlement
+                    let payment_payload_for_queue = payment_payload.clone();
+                    let payment_requirements_for_queue = payment_requirements.clone();
 
                     // Step 1: Verify with facilitator
                     let verify_result = facilitator
@@ -188,84 +198,53 @@ where
 
                     match verify_result {
                         Ok(verify_response) if verify_response.is_valid => {
-                            info!("Payment verified, attempting settlement before processing request");
+                            info!("Payment verified for payer: {:?}", verify_response.payer);
 
-                            // Step 2: Settle BEFORE processing the request
-                            // This ensures we collect payment before delivering the service
-                            let settle_result = facilitator
-                                .settle(payment_payload_for_settle, payment_requirements_for_settle)
-                                .await;
+                            // Step 2: Queue settlement for background processing
+                            // This decouples settlement from the HTTP request flow
+                            let pending_settlement = PendingSettlement::new(
+                                payment_payload_for_queue,
+                                payment_requirements_for_queue,
+                                nonce_hex.clone(),
+                            );
 
-                            match settle_result {
-                                Ok(settle_response) if settle_response.success => {
-                                    info!(
-                                        "Payment settled successfully. Tx: {:?}. Proceeding with request.",
-                                        settle_response.transaction
-                                    );
+                            if let Err(_rejected) = settlement_queue.push(pending_settlement).await {
+                                // Queue is full - return 503 Service Unavailable
+                                error!(
+                                    "Settlement queue full, rejecting request. Queue size: {}",
+                                    settlement_queue.len()
+                                );
 
-                                    // Step 3: Payment collected - now process the request
-                                    let res = service.call(req).await?;
+                                let response = HttpResponse::ServiceUnavailable()
+                                    .body("Service temporarily unavailable: settlement queue full. Please retry later.");
 
-                                    // Add payment response header to successful response
-                                    let payment_response = PaymentResponse::success();
-                                    let encoded = payment_response.to_base64().unwrap_or_default();
-
-                                    let (req, response) = res.into_parts();
-                                    let mut response = response.map_into_left_body();
-
-                                    if let Ok(header_value) = HeaderValue::from_str(&encoded) {
-                                        response.headers_mut().insert(
-                                            HeaderName::from_static("payment-response"),
-                                            header_value,
-                                        );
-                                    }
-
-                                    Ok(ServiceResponse::new(req, response))
-                                }
-                                Ok(settle_response) => {
-                                    // Settlement failed - do NOT process the request
-                                    let error_msg = settle_response
-                                        .error_reason
-                                        .unwrap_or_else(|| "Settlement failed".to_string());
-                                    error!("Payment settlement failed: {}. Request rejected.", error_msg);
-
-                                    let payment_response = PaymentResponse::failure(&format!(
-                                        "Payment settlement failed: {}",
-                                        error_msg
-                                    ));
-                                    let encoded = payment_response.to_base64().unwrap_or_default();
-
-                                    let response = HttpResponse::PaymentRequired()
-                                        .insert_header((
-                                            HeaderName::from_static("payment-response"),
-                                            HeaderValue::from_str(&encoded)
-                                                .unwrap_or_else(|_| HeaderValue::from_static("")),
-                                        ))
-                                        .body(format!("Payment settlement failed: {}", error_msg));
-
-                                    Ok(req.into_response(response).map_into_right_body())
-                                }
-                                Err(e) => {
-                                    // Settlement error - do NOT process the request
-                                    error!("Settlement error: {}. Request rejected.", e);
-
-                                    let payment_response = PaymentResponse::failure(&format!(
-                                        "Settlement error: {}",
-                                        e
-                                    ));
-                                    let encoded = payment_response.to_base64().unwrap_or_default();
-
-                                    let response = HttpResponse::PaymentRequired()
-                                        .insert_header((
-                                            HeaderName::from_static("payment-response"),
-                                            HeaderValue::from_str(&encoded)
-                                                .unwrap_or_else(|_| HeaderValue::from_static("")),
-                                        ))
-                                        .body(format!("Settlement error: {}", e));
-
-                                    Ok(req.into_response(response).map_into_right_body())
-                                }
+                                return Ok(req.into_response(response).map_into_right_body());
                             }
+
+                            debug!(
+                                "Settlement queued for nonce {}, queue depth: {}",
+                                nonce_hex,
+                                settlement_queue.len()
+                            );
+
+                            // Step 3: Process the request immediately (settlement happens async)
+                            let res = service.call(req).await?;
+
+                            // Add payment response header to successful response
+                            let payment_response = PaymentResponse::success();
+                            let encoded = payment_response.to_base64().unwrap_or_default();
+
+                            let (req, response) = res.into_parts();
+                            let mut response = response.map_into_left_body();
+
+                            if let Ok(header_value) = HeaderValue::from_str(&encoded) {
+                                response.headers_mut().insert(
+                                    HeaderName::from_static("payment-response"),
+                                    header_value,
+                                );
+                            }
+
+                            Ok(ServiceResponse::new(req, response))
                         }
                         Ok(verify_response) => {
                             // Payment invalid

@@ -13,8 +13,8 @@ use std::sync::Arc;
 use config::Config;
 use handlers::{agent_info_handler, chat_handler};
 use middleware::X402Middleware;
-use services::{FacilitatorClient, KimiClient, NonceTracker};
-use tracing::{error, info};
+use services::{FacilitatorClient, KimiClient, NonceTracker, SettlementQueue, SettlementWorker};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 /// Root endpoint with usage instructions
@@ -58,10 +58,40 @@ For more info on x402: https://www.x402.org
 }
 
 /// Health check endpoint
-async fn health_handler() -> HttpResponse {
+async fn health_handler(
+    settlement_queue: Option<web::Data<Arc<SettlementQueue>>>,
+) -> HttpResponse {
+    let queue_depth = settlement_queue
+        .as_ref()
+        .map(|q| q.len())
+        .unwrap_or(0);
+
     HttpResponse::Ok().json(serde_json::json!({
         "status": "healthy",
-        "service": "x402-kimi-bot"
+        "service": "x402-kimi-bot",
+        "settlement_queue_depth": queue_depth
+    }))
+}
+
+/// Metrics endpoint for observability
+async fn metrics_handler(
+    settlement_queue: web::Data<Arc<SettlementQueue>>,
+    worker_metrics: web::Data<Arc<services::SettlementMetrics>>,
+) -> HttpResponse {
+    let (total, success, failure, retries) = worker_metrics.get_stats();
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "settlement_queue": {
+            "depth": settlement_queue.len(),
+            "max_size": settlement_queue.max_size(),
+            "is_full": settlement_queue.is_full()
+        },
+        "settlement_worker": {
+            "total_processed": total,
+            "success_count": success,
+            "failure_count": failure,
+            "retry_count": retries
+        }
     }))
 }
 
@@ -141,12 +171,41 @@ async fn main() -> std::io::Result<()> {
     let nonce_tracker = Arc::new(NonceTracker::with_default_ttl());
     info!("Nonce tracker initialized for replay protection");
 
-    // Store config for middleware
+    // Create settlement queue with configurable max size
+    let max_queue_size = std::env::var("SETTLEMENT_QUEUE_MAX_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(services::DEFAULT_MAX_QUEUE_SIZE);
+    let settlement_queue = Arc::new(SettlementQueue::with_max_size(max_queue_size));
+    info!(
+        "Settlement queue initialized with max size: {}",
+        max_queue_size
+    );
+
+    // Create shutdown channel for graceful shutdown
+    let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+    // Spawn background settlement worker
+    let worker = SettlementWorker::new(settlement_queue.clone(), facilitator_client.clone());
+    let worker_metrics = worker.metrics();
+    let shutdown_rx = shutdown_tx.subscribe();
+    tokio::spawn(async move {
+        worker.run(shutdown_rx).await;
+    });
+    info!("Background settlement worker started");
+
+    // Store references for middleware and handlers
     let config_for_middleware = config.clone();
     let facilitator_for_middleware = facilitator_client.clone();
     let nonce_tracker_for_middleware = nonce_tracker.clone();
+    let settlement_queue_for_middleware = settlement_queue.clone();
+    let settlement_queue_for_app = settlement_queue.clone();
+    let worker_metrics_for_app = worker_metrics.clone();
 
-    HttpServer::new(move || {
+    // Clone shutdown_tx for the shutdown handler
+    let shutdown_tx_clone = shutdown_tx.clone();
+
+    let server = HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin()
             .allowed_methods(vec!["GET", "POST", "OPTIONS"])
@@ -165,9 +224,13 @@ async fn main() -> std::io::Result<()> {
             // Share config and Kimi client across handlers
             .app_data(web::Data::new(config_for_middleware.clone()))
             .app_data(web::Data::new(kimi_client.clone()))
+            // Share settlement queue and metrics for observability
+            .app_data(web::Data::new(settlement_queue_for_app.clone()))
+            .app_data(web::Data::new(worker_metrics_for_app.clone()))
             // Public endpoints (no payment required)
             .route("/", web::get().to(root_handler))
             .route("/health", web::get().to(health_handler))
+            .route("/metrics", web::get().to(metrics_handler))
             .route("/agent.json", web::get().to(agent_info_handler))
             // Serve x402 discovery document explicitly (actix-files has issues with extensionless files)
             .route("/.well-known/x402", web::get().to(x402_discovery_handler))
@@ -180,6 +243,7 @@ async fn main() -> std::io::Result<()> {
                         config_for_middleware.clone(),
                         facilitator_for_middleware.clone(),
                         nonce_tracker_for_middleware.clone(),
+                        settlement_queue_for_middleware.clone(),
                     ))
                     .route("", web::post().to(chat_handler)),
             )
@@ -190,11 +254,38 @@ async fn main() -> std::io::Result<()> {
                         config_for_middleware.clone(),
                         facilitator_for_middleware.clone(),
                         nonce_tracker_for_middleware.clone(),
+                        settlement_queue_for_middleware.clone(),
                     ))
                     .route("/completions", web::post().to(chat_handler)),
             )
     })
     .bind(("0.0.0.0", port))?
-    .run()
-    .await
+    .run();
+
+    // Run server and handle graceful shutdown
+    let result = server.await;
+
+    // Signal worker to shut down
+    info!("Server stopping, signaling settlement worker to shut down...");
+    let _ = shutdown_tx_clone.send(());
+
+    // Give the worker a moment to finish any in-flight settlement
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Log final queue state
+    let remaining = settlement_queue.len();
+    if remaining > 0 {
+        warn!(
+            "Shutting down with {} pending settlements in queue (will be lost)",
+            remaining
+        );
+    }
+
+    let (total, success, failure, retries) = worker_metrics.get_stats();
+    info!(
+        "Final settlement stats: total={}, success={}, failure={}, retries={}",
+        total, success, failure, retries
+    );
+
+    result
 }
