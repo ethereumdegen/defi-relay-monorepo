@@ -24,6 +24,12 @@ COPY --from=builder /app/target/release/x402-kimi-bot /usr/local/bin/x402-kimi-b
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/SYSTEM_PROMPT.md ./SYSTEM_PROMPT.md
 
+# Create data directory for SQLite settlement persistence
+# IMPORTANT: Mount a volume here to persist settlements across container restarts
+# Example: docker run -v settlements_data:/app/data ...
+RUN mkdir -p /app/data
+VOLUME /app/data
+
 EXPOSE $PORT
 ENV RUST_LOG=info
 

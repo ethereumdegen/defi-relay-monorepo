@@ -19,3 +19,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 moka = { version = "0.12", features = ["sync"] }
 backoff = { version = "0.4", features = ["tokio"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }

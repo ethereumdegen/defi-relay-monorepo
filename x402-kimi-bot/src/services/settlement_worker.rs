@@ -2,9 +2,12 @@
 //!
 //! This worker runs in the background, processing settlements from the queue
 //! with retry logic and graceful shutdown support.
+//!
+//! Settlements are persisted to SQLite, so they survive server restarts.
 
 use super::facilitator::FacilitatorClient;
-use super::settlement_queue::{PendingSettlement, SettlementQueue};
+use super::settlement_queue::SettlementQueue;
+use super::settlement_store::StoredSettlement;
 use backoff::{backoff::Backoff, ExponentialBackoff};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -84,32 +87,70 @@ impl SettlementWorker {
 
     /// Run the worker until shutdown signal is received
     pub async fn run(&self, mut shutdown: broadcast::Receiver<()>) {
-        info!("Settlement worker started");
+        info!("Settlement worker started (with SQLite persistence)");
 
         loop {
-            tokio::select! {
-                biased;
-
-                // Check for shutdown signal first
-                _ = shutdown.recv() => {
-                    info!("Settlement worker received shutdown signal");
-                    break;
+            // Try to claim the next pending settlement from the store
+            let settlement = match self.queue.store().claim_next() {
+                Ok(Some(s)) => {
+                    // Decrement in-memory counter since we claimed one
+                    self.queue.len();
+                    Some(s)
                 }
+                Ok(None) => None,
+                Err(e) => {
+                    error!("Failed to claim settlement from store: {}", e);
+                    None
+                }
+            };
 
-                // Process settlements from queue
-                settlement = self.queue.pop() => {
-                    if let Some(s) = settlement {
-                        self.process_settlement(s).await;
+            if let Some(s) = settlement {
+                // Store the ID before processing in case we need it for recovery
+                let settlement_id = s.id;
+
+                // Process without blocking the shutdown check for too long
+                tokio::select! {
+                    biased;
+
+                    _ = shutdown.recv() => {
+                        // Put it back to pending since we didn't finish
+                        if let Err(e) = self.queue.store().record_retry(settlement_id, "Worker shutdown") {
+                            error!("Failed to re-queue settlement {} on shutdown: {}", settlement_id, e);
+                        }
+                        info!("Settlement worker received shutdown signal during processing");
+                        break;
+                    }
+
+                    _ = self.process_settlement(s) => {
+                        // Settlement processed (success or permanent failure)
+                    }
+                }
+            } else {
+                // No pending settlements, wait for notification or shutdown
+                tokio::select! {
+                    biased;
+
+                    _ = shutdown.recv() => {
+                        info!("Settlement worker received shutdown signal");
+                        break;
+                    }
+
+                    _ = self.queue.wait_for_items() => {
+                        // New item added, loop back to claim it
+                    }
+
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                        // Periodic wake-up to check for items (in case notify was missed)
                     }
                 }
             }
         }
 
-        // Graceful shutdown: log remaining queue size
+        // Graceful shutdown: log remaining queue size (persisted, so not lost!)
         let remaining = self.queue.len();
         if remaining > 0 {
-            warn!(
-                "Settlement worker shutting down with {} pending settlements in queue",
+            info!(
+                "Settlement worker shutting down with {} pending settlements (persisted to disk)",
                 remaining
             );
         }
@@ -122,17 +163,55 @@ impl SettlementWorker {
     }
 
     /// Process a single settlement with retry logic
-    async fn process_settlement(&self, settlement: PendingSettlement) {
+    async fn process_settlement(&self, settlement: StoredSettlement) {
         let nonce = &settlement.nonce;
-        let queued_duration = settlement.queued_at.elapsed();
+        let id = settlement.id;
+        let queued_duration = chrono::Utc::now()
+            .signed_duration_since(settlement.queued_at)
+            .to_std()
+            .unwrap_or_default();
+
+        // Deserialize the stored JSON
+        let payment_payload = match settlement.payment_payload() {
+            Ok(p) => p,
+            Err(e) => {
+                error!(
+                    "Failed to deserialize payment payload for settlement {}: {}",
+                    id, e
+                );
+                let _ = self
+                    .queue
+                    .store()
+                    .mark_failed(id, &format!("Deserialization error: {}", e));
+                self.metrics.record_failure();
+                return;
+            }
+        };
+
+        let payment_requirements = match settlement.payment_requirements() {
+            Ok(r) => r,
+            Err(e) => {
+                error!(
+                    "Failed to deserialize payment requirements for settlement {}: {}",
+                    id, e
+                );
+                let _ = self
+                    .queue
+                    .store()
+                    .mark_failed(id, &format!("Deserialization error: {}", e));
+                self.metrics.record_failure();
+                return;
+            }
+        };
 
         debug!(
-            "Processing settlement for nonce {} (queued for {:?})",
-            nonce, queued_duration
+            "Processing settlement {} for nonce {} (queued for {:?}, {} previous retries)",
+            id, nonce, queued_duration, settlement.retry_count
         );
 
         let mut backoff = Self::create_backoff();
-        let mut attempts = 0;
+        let mut attempts = settlement.retry_count as u32;
+        let max_total_attempts = MAX_SETTLEMENT_RETRIES + settlement.retry_count as u32;
 
         loop {
             attempts += 1;
@@ -140,20 +219,24 @@ impl SettlementWorker {
             let start = Instant::now();
             let result = self
                 .facilitator
-                .settle(
-                    settlement.payment_payload.clone(),
-                    settlement.payment_requirements.clone(),
-                )
+                .settle(payment_payload.clone(), payment_requirements.clone())
                 .await;
 
             let elapsed = start.elapsed();
 
             match result {
                 Ok(settle_response) if settle_response.success => {
+                    let tx_hash = settle_response
+                        .transaction
+                        .as_deref()
+                        .unwrap_or("unknown");
                     info!(
-                        "Settlement successful for nonce {} (attempt {}, took {:?}). Tx: {:?}",
-                        nonce, attempts, elapsed, settle_response.transaction
+                        "Settlement successful for nonce {} (attempt {}, took {:?}). Tx: {}",
+                        nonce, attempts, elapsed, tx_hash
                     );
+                    if let Err(e) = self.queue.store().mark_completed(id, tx_hash) {
+                        error!("Failed to mark settlement {} as completed: {}", id, e);
+                    }
                     self.metrics.record_success();
                     return;
                 }
@@ -164,10 +247,10 @@ impl SettlementWorker {
                         .unwrap_or_else(|| "Unknown error".to_string());
 
                     // Check if this is a retryable error
-                    if Self::is_retryable_error(&error_msg) && attempts < MAX_SETTLEMENT_RETRIES {
+                    if Self::is_retryable_error(&error_msg) && attempts < max_total_attempts {
                         warn!(
                             "Settlement failed for nonce {} (attempt {}/{}): {}. Retrying...",
-                            nonce, attempts, MAX_SETTLEMENT_RETRIES, error_msg
+                            nonce, attempts, max_total_attempts, error_msg
                         );
                         self.metrics.record_retry();
 
@@ -180,18 +263,23 @@ impl SettlementWorker {
                     // Non-retryable or max retries exceeded
                     error!(
                         "Settlement permanently failed for nonce {} after {} attempts: {}. \
-                         Manual intervention may be required. Payload: {:?}",
-                        nonce, attempts, error_msg, settlement.payment_payload
+                         Settlement ID {} saved in database for manual retry.",
+                        nonce, attempts, error_msg, id
                     );
+                    if let Err(e) = self.queue.store().mark_failed(id, &error_msg) {
+                        error!("Failed to mark settlement {} as failed: {}", id, e);
+                    }
                     self.metrics.record_failure();
                     return;
                 }
                 Err(e) => {
+                    let error_msg = e.to_string();
+
                     // Network/connection error - always retry these
-                    if attempts < MAX_SETTLEMENT_RETRIES {
+                    if attempts < max_total_attempts {
                         warn!(
                             "Settlement error for nonce {} (attempt {}/{}): {}. Retrying...",
-                            nonce, attempts, MAX_SETTLEMENT_RETRIES, e
+                            nonce, attempts, max_total_attempts, error_msg
                         );
                         self.metrics.record_retry();
 
@@ -203,9 +291,12 @@ impl SettlementWorker {
 
                     error!(
                         "Settlement permanently failed for nonce {} after {} attempts: {}. \
-                         Manual intervention may be required. Payload: {:?}",
-                        nonce, attempts, e, settlement.payment_payload
+                         Settlement ID {} saved in database for manual retry.",
+                        nonce, attempts, error_msg, id
                     );
+                    if let Err(e) = self.queue.store().mark_failed(id, &error_msg) {
+                        error!("Failed to mark settlement {} as failed: {}", id, e);
+                    }
                     self.metrics.record_failure();
                     return;
                 }

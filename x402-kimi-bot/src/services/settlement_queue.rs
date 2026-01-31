@@ -3,14 +3,17 @@
 //! This module provides a FIFO queue for pending settlements that allows
 //! the HTTP request to return immediately after payment verification,
 //! while settlement is processed asynchronously by a background worker.
+//!
+//! The queue is backed by SQLite for persistence, ensuring settlements
+//! survive server restarts.
 
 use crate::models::{PaymentPayload, VerifyPaymentRequirements};
-use std::collections::VecDeque;
+use crate::services::settlement_store::{SettlementStatus, SettlementStore};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{Mutex, Notify};
-use tracing::{debug, warn};
+use tokio::sync::Notify;
+use tracing::{debug, info, warn};
 
 /// Default maximum queue size (can be overridden via env var)
 pub const DEFAULT_MAX_QUEUE_SIZE: usize = 10_000;
@@ -44,10 +47,10 @@ impl PendingSettlement {
     }
 }
 
-/// FIFO queue for pending settlements
+/// FIFO queue for pending settlements backed by SQLite
 pub struct SettlementQueue {
-    /// The inner queue protected by a mutex
-    queue: Mutex<VecDeque<PendingSettlement>>,
+    /// SQLite-backed persistent store
+    store: Arc<SettlementStore>,
     /// Notify handle to wake up workers when items are added
     notify: Arc<Notify>,
     /// Maximum queue size
@@ -58,84 +61,123 @@ pub struct SettlementQueue {
 
 impl SettlementQueue {
     /// Create a new settlement queue with the default max size
+    /// Uses default database path "data/settlements.db"
     pub fn new() -> Self {
         Self::with_max_size(DEFAULT_MAX_QUEUE_SIZE)
     }
 
     /// Create a new settlement queue with a custom max size
+    /// Uses default database path "data/settlements.db"
     pub fn with_max_size(max_size: usize) -> Self {
-        Self {
-            queue: Mutex::new(VecDeque::new()),
-            notify: Arc::new(Notify::new()),
-            max_size,
-            len: AtomicUsize::new(0),
-        }
+        Self::with_store_and_max_size(Self::default_db_path(), max_size)
+            .expect("Failed to initialize settlement store")
     }
 
-    /// Push a settlement to the queue
+    /// Default database path
+    fn default_db_path() -> &'static str {
+        "data/settlements.db"
+    }
+
+    /// Create a settlement queue with a specific database path and max size
+    pub fn with_store_and_max_size(
+        db_path: &str,
+        max_size: usize,
+    ) -> Result<Self, crate::services::settlement_store::SettlementStoreError> {
+        // Ensure the data directory exists
+        if let Some(parent) = std::path::Path::new(db_path).parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+
+        let store = Arc::new(SettlementStore::open(db_path)?);
+
+        // Recover any settlements that were in_progress when we crashed
+        let recovered = store.recover_in_progress()?;
+        if recovered > 0 {
+            info!(
+                "Recovered {} in-progress settlements from previous session",
+                recovered
+            );
+        }
+
+        // Get initial count from database
+        let pending = store.pending_count()? as usize;
+        let in_progress = store.in_progress_count()? as usize;
+        let initial_len = pending + in_progress;
+
+        if initial_len > 0 {
+            info!(
+                "Loaded {} pending settlements from database ({} pending, {} in-progress)",
+                initial_len, pending, in_progress
+            );
+        }
+
+        Ok(Self {
+            store,
+            notify: Arc::new(Notify::new()),
+            max_size,
+            len: AtomicUsize::new(initial_len),
+        })
+    }
+
+    /// Get a reference to the underlying store
+    pub fn store(&self) -> &Arc<SettlementStore> {
+        &self.store
+    }
+
+    /// Push a settlement to the queue (persisted to SQLite)
     /// Returns Ok(()) if successful, Err(PendingSettlement) if queue is full
     pub async fn push(&self, settlement: PendingSettlement) -> Result<(), PendingSettlement> {
-        let mut queue = self.queue.lock().await;
+        let current_len = self.len.load(Ordering::SeqCst);
 
-        if queue.len() >= self.max_size {
+        if current_len >= self.max_size {
             warn!(
                 "Settlement queue full ({}/{}), rejecting settlement for nonce {}",
-                queue.len(),
-                self.max_size,
-                settlement.nonce
+                current_len, self.max_size, settlement.nonce
             );
             return Err(settlement);
         }
 
-        debug!(
-            "Queuing settlement for nonce {}, queue depth: {}",
-            settlement.nonce,
-            queue.len() + 1
-        );
+        // Insert into SQLite (blocking call, but SQLite is fast)
+        match self.store.insert(
+            &settlement.nonce,
+            &settlement.payment_payload,
+            &settlement.payment_requirements,
+        ) {
+            Ok(Some(_id)) => {
+                let new_len = self.len.fetch_add(1, Ordering::SeqCst) + 1;
+                debug!(
+                    "Queuing settlement for nonce {} (persisted), queue depth: {}",
+                    settlement.nonce, new_len
+                );
 
-        queue.push_back(settlement);
-        self.len.store(queue.len(), Ordering::SeqCst);
-
-        // Notify waiting workers
-        self.notify.notify_one();
-
-        Ok(())
-    }
-
-    /// Pop the next settlement from the queue (FIFO)
-    /// This will wait until an item is available or the notify is triggered
-    pub async fn pop(&self) -> Option<PendingSettlement> {
-        loop {
-            // Try to get an item
-            {
-                let mut queue = self.queue.lock().await;
-                if let Some(settlement) = queue.pop_front() {
-                    self.len.store(queue.len(), Ordering::SeqCst);
-                    debug!(
-                        "Dequeued settlement for nonce {}, queue depth: {}",
-                        settlement.nonce,
-                        queue.len()
-                    );
-                    return Some(settlement);
-                }
+                // Notify waiting workers
+                self.notify.notify_one();
+                Ok(())
             }
-
-            // Wait for notification that new items were added
-            self.notify.notified().await;
+            Ok(None) => {
+                // Duplicate nonce - already exists in store
+                debug!(
+                    "Settlement for nonce {} already exists, skipping",
+                    settlement.nonce
+                );
+                Ok(()) // Return Ok since the settlement is already persisted
+            }
+            Err(e) => {
+                warn!("Failed to persist settlement for nonce {}: {}", settlement.nonce, e);
+                // Return the settlement so caller knows it wasn't persisted
+                Err(settlement)
+            }
         }
     }
 
-    /// Try to pop without waiting (non-blocking)
-    pub async fn try_pop(&self) -> Option<PendingSettlement> {
-        let mut queue = self.queue.lock().await;
-        let settlement = queue.pop_front();
-        if settlement.is_some() {
-            self.len.store(queue.len(), Ordering::SeqCst);
+    /// Update the cached length from the database
+    fn refresh_len(&self) {
+        if let Ok(pending) = self.store.pending_count() {
+            self.len.store(pending as usize, Ordering::SeqCst);
         }
-        settlement
     }
 
-    /// Get the current queue length
+    /// Get the current queue length (pending settlements)
     pub fn len(&self) -> usize {
         self.len.load(Ordering::SeqCst)
     }
@@ -159,6 +201,26 @@ impl SettlementQueue {
     pub fn notify_all(&self) {
         self.notify.notify_waiters();
     }
+
+    /// Wait for notification of new items
+    pub async fn wait_for_items(&self) {
+        self.notify.notified().await;
+    }
+
+    /// Get counts by status for metrics
+    pub fn get_status_counts(&self) -> (i64, i64, i64, i64) {
+        let pending = self.store.pending_count().unwrap_or(0);
+        let in_progress = self.store.in_progress_count().unwrap_or(0);
+        let completed = self
+            .store
+            .count_by_status(SettlementStatus::Completed)
+            .unwrap_or(0);
+        let failed = self
+            .store
+            .count_by_status(SettlementStatus::Failed)
+            .unwrap_or(0);
+        (pending, in_progress, completed, failed)
+    }
 }
 
 impl Default for SettlementQueue {
@@ -167,93 +229,4 @@ impl Default for SettlementQueue {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::domains::{DomainEthAddress, DomainUint256};
-
-    fn mock_settlement(nonce_id: &str) -> PendingSettlement {
-        // Create a valid 32-byte hex nonce from the test identifier
-        // Use a simple hash-like pattern: pad with zeros
-        let nonce_hex = format!("0x{:0>64}", format!("{:x}", nonce_id.len() * 1000 + nonce_id.chars().map(|c| c as usize).sum::<usize>()));
-
-        // Create minimal mock data for testing
-        let payment_payload = PaymentPayload {
-            x402_version: 2,
-            accepted: crate::models::AcceptedRequirements {
-                scheme: "exact".to_string(),
-                network: "eip155:8453".to_string(),
-                amount: "1000".to_string(),
-                pay_to: DomainEthAddress::from_hex("0x0000000000000000000000000000000000000001").unwrap(),
-                max_timeout_seconds: 60,
-                asset: DomainEthAddress::from_hex("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913").unwrap(),
-                extra: None,
-            },
-            payload: crate::models::ExactEvmPayload {
-                signature: "0x".to_string(),
-                authorization: crate::models::Eip3009Authorization {
-                    from: DomainEthAddress::from_hex("0x0000000000000000000000000000000000000002").unwrap(),
-                    to: DomainEthAddress::from_hex("0x0000000000000000000000000000000000000001").unwrap(),
-                    value: DomainUint256::from_str("1000").unwrap(),
-                    valid_after: DomainUint256::from_str("0").unwrap(),
-                    valid_before: DomainUint256::from_str("999999999999").unwrap(),
-                    nonce: crate::models::domains::DomainBytes32::from_hex(&nonce_hex).unwrap(),
-                },
-            },
-        };
-
-        let payment_requirements = VerifyPaymentRequirements {
-            scheme: "exact".to_string(),
-            network: "eip155:8453".to_string(),
-            amount: "1000".to_string(),
-            pay_to: DomainEthAddress::from_hex("0x0000000000000000000000000000000000000001").unwrap(),
-            max_timeout_seconds: 60,
-            asset: DomainEthAddress::from_hex("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913").unwrap(),
-            extra: None,
-        };
-
-        // Use the original nonce_id as the tracking string (not the hex)
-        PendingSettlement::new(payment_payload, payment_requirements, nonce_id.to_string())
-    }
-
-    #[tokio::test]
-    async fn test_push_pop() {
-        let queue = SettlementQueue::new();
-
-        let settlement = mock_settlement("test1");
-        queue.push(settlement).await.unwrap();
-
-        assert_eq!(queue.len(), 1);
-
-        let popped = queue.try_pop().await;
-        assert!(popped.is_some());
-        assert_eq!(popped.unwrap().nonce, "test1");
-        assert_eq!(queue.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_fifo_order() {
-        let queue = SettlementQueue::new();
-
-        queue.push(mock_settlement("first")).await.unwrap();
-        queue.push(mock_settlement("second")).await.unwrap();
-        queue.push(mock_settlement("third")).await.unwrap();
-
-        assert_eq!(queue.try_pop().await.unwrap().nonce, "first");
-        assert_eq!(queue.try_pop().await.unwrap().nonce, "second");
-        assert_eq!(queue.try_pop().await.unwrap().nonce, "third");
-    }
-
-    #[tokio::test]
-    async fn test_max_size() {
-        let queue = SettlementQueue::with_max_size(2);
-
-        queue.push(mock_settlement("1")).await.unwrap();
-        queue.push(mock_settlement("2")).await.unwrap();
-
-        // Third should fail
-        let result = queue.push(mock_settlement("3")).await;
-        assert!(result.is_err());
-        assert!(queue.is_full());
-    }
-}
+// Tests moved to settlement_store.rs which uses in-memory SQLite

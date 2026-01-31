@@ -14,7 +14,7 @@ use config::Config;
 use handlers::{agent_info_handler, chat_handler};
 use middleware::X402Middleware;
 use services::{FacilitatorClient, KimiClient, NonceTracker, RateLimiter, SettlementQueue, SettlementWorker};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 /// Root endpoint with usage instructions
@@ -80,12 +80,21 @@ async fn metrics_handler(
     worker_metrics: web::Data<Arc<services::SettlementMetrics>>,
 ) -> HttpResponse {
     let (total, success, failure, retries) = worker_metrics.get_stats();
+    let (pending, in_progress, completed, failed) = settlement_queue.get_status_counts();
 
     HttpResponse::Ok().json(serde_json::json!({
         "settlement_queue": {
-            "depth": settlement_queue.len(),
+            "pending": pending,
+            "in_progress": in_progress,
             "max_size": settlement_queue.max_size(),
             "is_full": settlement_queue.is_full()
+        },
+        "settlement_store": {
+            "pending": pending,
+            "in_progress": in_progress,
+            "completed": completed,
+            "failed": failed,
+            "total": pending + in_progress + completed + failed
         },
         "settlement_worker": {
             "total_processed": total,
@@ -176,15 +185,25 @@ async fn main() -> std::io::Result<()> {
     let rate_limiter = Arc::new(RateLimiter::new(5));
     info!("Rate limiter initialized: 5 requests/second per address");
 
-    // Create settlement queue with configurable max size
+    // Create persistent settlement queue backed by SQLite
     let max_queue_size = std::env::var("SETTLEMENT_QUEUE_MAX_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(services::DEFAULT_MAX_QUEUE_SIZE);
-    let settlement_queue = Arc::new(SettlementQueue::with_max_size(max_queue_size));
+    let db_path = std::env::var("SETTLEMENT_DB_PATH")
+        .unwrap_or_else(|_| "data/settlements.db".to_string());
+
+    let settlement_queue = match SettlementQueue::with_store_and_max_size(&db_path, max_queue_size)
+    {
+        Ok(q) => Arc::new(q),
+        Err(e) => {
+            error!("Failed to initialize settlement store at {}: {}", db_path, e);
+            std::process::exit(1);
+        }
+    };
     info!(
-        "Settlement queue initialized with max size: {}",
-        max_queue_size
+        "Settlement queue initialized with SQLite persistence at {} (max size: {})",
+        db_path, max_queue_size
     );
 
     // Create shutdown channel for graceful shutdown
@@ -280,11 +299,11 @@ async fn main() -> std::io::Result<()> {
     // Give the worker a moment to finish any in-flight settlement
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    // Log final queue state
+    // Log final queue state (settlements are persisted, so they won't be lost!)
     let remaining = settlement_queue.len();
     if remaining > 0 {
-        warn!(
-            "Shutting down with {} pending settlements in queue (will be lost)",
+        info!(
+            "Shutting down with {} pending settlements in queue (persisted to SQLite, will resume on restart)",
             remaining
         );
     }
