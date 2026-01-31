@@ -3,7 +3,7 @@ use crate::models::{
     PaymentPayload, PaymentRequired, PaymentResponse, VerifyPaymentRequirements,
     usdc_address, BASE_NETWORK,
 };
-use crate::services::{FacilitatorClient, NonceTracker, PendingSettlement, SettlementQueue};
+use crate::services::{FacilitatorClient, NonceTracker, PendingSettlement, RateLimiter, SettlementQueue};
 use actix_web::{
     body::EitherBody,
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
@@ -23,6 +23,7 @@ pub struct X402Middleware {
     facilitator: FacilitatorClient,
     nonce_tracker: Arc<NonceTracker>,
     settlement_queue: Arc<SettlementQueue>,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl X402Middleware {
@@ -31,12 +32,14 @@ impl X402Middleware {
         facilitator: FacilitatorClient,
         nonce_tracker: Arc<NonceTracker>,
         settlement_queue: Arc<SettlementQueue>,
+        rate_limiter: Arc<RateLimiter>,
     ) -> Self {
         X402Middleware {
             config,
             facilitator,
             nonce_tracker,
             settlement_queue,
+            rate_limiter,
         }
     }
 }
@@ -60,6 +63,7 @@ where
             facilitator: self.facilitator.clone(),
             nonce_tracker: self.nonce_tracker.clone(),
             settlement_queue: self.settlement_queue.clone(),
+            rate_limiter: self.rate_limiter.clone(),
         }))
     }
 }
@@ -70,6 +74,7 @@ pub struct X402MiddlewareService<S> {
     facilitator: FacilitatorClient,
     nonce_tracker: Arc<NonceTracker>,
     settlement_queue: Arc<SettlementQueue>,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl<S, B> Service<ServiceRequest> for X402MiddlewareService<S>
@@ -90,6 +95,7 @@ where
         let facilitator = self.facilitator.clone();
         let nonce_tracker = self.nonce_tracker.clone();
         let settlement_queue = self.settlement_queue.clone();
+        let rate_limiter = self.rate_limiter.clone();
 
         Box::pin(async move {
             // Check for X-PAYMENT header
@@ -157,6 +163,17 @@ where
                             return Ok(req.into_response(response).map_into_right_body());
                         }
                     };
+
+                    // Check rate limit based on payer address
+                    let payer_address = payment_payload.payload.authorization.from.to_hex();
+                    if !rate_limiter.check_rate_limit(&payer_address) {
+                        warn!("Rate limit exceeded for address: {}", payer_address);
+                        let response = HttpResponse::TooManyRequests()
+                            .insert_header(("Retry-After", "1"))
+                            .body("Rate limit exceeded: maximum 5 requests per second per address");
+
+                        return Ok(req.into_response(response).map_into_right_body());
+                    }
 
                     // Extract nonce and check for replay attack
                     let nonce_hex = payment_payload.payload.authorization.nonce.to_hex();

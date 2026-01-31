@@ -13,7 +13,7 @@ use std::sync::Arc;
 use config::Config;
 use handlers::{agent_info_handler, chat_handler};
 use middleware::X402Middleware;
-use services::{FacilitatorClient, KimiClient, NonceTracker, SettlementQueue, SettlementWorker};
+use services::{FacilitatorClient, KimiClient, NonceTracker, RateLimiter, SettlementQueue, SettlementWorker};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -29,6 +29,7 @@ This bot provides access to Moonshot's Kimi AI using the x402 payment protocol.
 ENDPOINTS:
   GET  /                       - This help page
   GET  /health                 - Health check
+  GET  /metrics                - Settlement stats and queue info
   GET  /.well-known/x402       - x402 discovery document
   GET  /agent.json             - Agent metadata (EIP-8004)
   POST /chat                   - Chat with Kimi (payment required)
@@ -171,6 +172,10 @@ async fn main() -> std::io::Result<()> {
     let nonce_tracker = Arc::new(NonceTracker::with_default_ttl());
     info!("Nonce tracker initialized for replay protection");
 
+    // Create rate limiter (5 requests per second per address)
+    let rate_limiter = Arc::new(RateLimiter::new(5));
+    info!("Rate limiter initialized: 5 requests/second per address");
+
     // Create settlement queue with configurable max size
     let max_queue_size = std::env::var("SETTLEMENT_QUEUE_MAX_SIZE")
         .ok()
@@ -199,6 +204,7 @@ async fn main() -> std::io::Result<()> {
     let facilitator_for_middleware = facilitator_client.clone();
     let nonce_tracker_for_middleware = nonce_tracker.clone();
     let settlement_queue_for_middleware = settlement_queue.clone();
+    let rate_limiter_for_middleware = rate_limiter.clone();
     let settlement_queue_for_app = settlement_queue.clone();
     let worker_metrics_for_app = worker_metrics.clone();
 
@@ -244,6 +250,7 @@ async fn main() -> std::io::Result<()> {
                         facilitator_for_middleware.clone(),
                         nonce_tracker_for_middleware.clone(),
                         settlement_queue_for_middleware.clone(),
+                        rate_limiter_for_middleware.clone(),
                     ))
                     .route("", web::post().to(chat_handler)),
             )
@@ -255,6 +262,7 @@ async fn main() -> std::io::Result<()> {
                         facilitator_for_middleware.clone(),
                         nonce_tracker_for_middleware.clone(),
                         settlement_queue_for_middleware.clone(),
+                        rate_limiter_for_middleware.clone(),
                     ))
                     .route("/completions", web::post().to(chat_handler)),
             )
