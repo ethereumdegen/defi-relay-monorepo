@@ -36,6 +36,14 @@
       {
         "id": "v2-eip155-exact",
         "chains": "eip155:*"
+      },
+      {
+        "id": "v1-eip155-permit",
+        "chains": "eip155:*"
+      },
+      {
+        "id": "v2-eip155-permit",
+        "chains": "eip155:*"
       }
     ]
 }
