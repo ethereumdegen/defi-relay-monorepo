@@ -237,6 +237,12 @@ pub enum PaymentVerificationError {
     /// The payment signature is invalid.
     #[error("{0}")]
     InvalidSignature(String),
+    /// The spender in a permit must be the facilitator.
+    #[error("Spender must be the facilitator")]
+    InvalidSpender,
+    /// The nonce doesn't match the on-chain nonce.
+    #[error("Nonce mismatch: expected {expected}, got {actual}")]
+    InvalidNonce { expected: String, actual: String },
     /// Transaction simulation failed.
     #[error("{0}")]
     TransactionSimulation(String),
@@ -263,6 +269,8 @@ impl AsPaymentProblem for PaymentVerificationError {
             PaymentVerificationError::RecipientMismatch => ErrorReason::RecipientMismatch,
             PaymentVerificationError::AssetMismatch => ErrorReason::AssetMismatch,
             PaymentVerificationError::InvalidSignature(_) => ErrorReason::InvalidSignature,
+            PaymentVerificationError::InvalidSpender => ErrorReason::InvalidSpender,
+            PaymentVerificationError::InvalidNonce { .. } => ErrorReason::InvalidNonce,
             PaymentVerificationError::TransactionSimulation(_) => {
                 ErrorReason::TransactionSimulation
             }
@@ -307,6 +315,10 @@ pub enum ErrorReason {
     AcceptedRequirementsMismatch,
     /// The signature is invalid.
     InvalidSignature,
+    /// The spender in a permit must be the facilitator.
+    InvalidSpender,
+    /// The nonce doesn't match the on-chain nonce.
+    InvalidNonce,
     /// Transaction simulation failed.
     TransactionSimulation,
     /// Insufficient on-chain balance.

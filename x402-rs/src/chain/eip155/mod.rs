@@ -522,12 +522,12 @@ impl Eip155MetaTransactionProvider for Eip155ChainProvider {
 
         if self.eip1559 {
             // For EIP-1559, fetch and apply multiplier to max fees
-            let (max_fee, max_priority_fee) = provider
-                .estimate_eip1559_fees(None)
+            let fees = provider
+                .estimate_eip1559_fees()
                 .instrument(tracing::info_span!("estimate_eip1559_fees"))
                 .await?;
-            let adjusted_max_fee = ((max_fee as f64) * multiplier) as u128;
-            let adjusted_priority_fee = ((max_priority_fee as f64) * multiplier) as u128;
+            let adjusted_max_fee = ((fees.max_fee_per_gas as f64) * multiplier) as u128;
+            let adjusted_priority_fee = ((fees.max_priority_fee_per_gas as f64) * multiplier) as u128;
             txr.set_max_fee_per_gas(adjusted_max_fee);
             txr.set_max_priority_fee_per_gas(adjusted_priority_fee);
         } else {

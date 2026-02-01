@@ -14,9 +14,11 @@
 //!
 //! # Built-in Schemes
 //!
-//! - [`v1_eip155_exact`] - V1 protocol, EVM chains, exact amount transfers
+//! - [`v1_eip155_exact`] - V1 protocol, EVM chains, exact amount transfers (EIP-3009)
+//! - [`v1_eip155_permit`] - V1 protocol, EVM chains, permit-based transfers (EIP-2612)
 //! - [`v1_solana_exact`] - V1 protocol, Solana, exact amount transfers
-//! - [`v2_eip155_exact`] - V2 protocol, EVM chains, exact amount transfers
+//! - [`v2_eip155_exact`] - V2 protocol, EVM chains, exact amount transfers (EIP-3009)
+//! - [`v2_eip155_permit`] - V2 protocol, EVM chains, permit-based transfers (EIP-2612)
 //! - [`v2_solana_exact`] - V2 protocol, Solana, exact amount transfers
 //!
 //! # Implementing a Custom Scheme
@@ -31,8 +33,10 @@
 //! See the [how-to-write-a-scheme](../../docs/how-to-write-a-scheme.md) guide for details.
 
 pub mod v1_eip155_exact;
+pub mod v1_eip155_permit;
 pub mod v1_solana_exact;
 pub mod v2_eip155_exact;
+pub mod v2_eip155_permit;
 pub mod v2_solana_exact;
 
 #[cfg(feature = "aptos")]
@@ -50,8 +54,10 @@ use crate::config::SchemeConfig;
 use crate::proto;
 use crate::proto::{AsPaymentProblem, ErrorReason, PaymentProblem, PaymentVerificationError};
 use crate::scheme::v1_eip155_exact::V1Eip155Exact;
+use crate::scheme::v1_eip155_permit::V1Eip155Permit;
 use crate::scheme::v1_solana_exact::V1SolanaExact;
 use crate::scheme::v2_eip155_exact::V2Eip155Exact;
+use crate::scheme::v2_eip155_permit::V2Eip155Permit;
 use crate::scheme::v2_solana_exact::V2SolanaExact;
 
 #[cfg(feature = "aptos")]
@@ -210,16 +216,20 @@ impl<P> SchemeBlueprints<P> {
 ///
 /// This includes:
 /// - V1 EIP-155 exact
+/// - V1 EIP-155 permit
 /// - V1 Solana exact
 /// - V2 EIP-155 exact
+/// - V2 EIP-155 permit
 /// - V2 Solana exact
 /// - V2 Aptos exact (when "aptos" feature is enabled)
 impl SchemeBlueprints<ChainProvider> {
     pub fn full() -> Self {
         let blueprints = Self::new()
             .and_register(V1Eip155Exact)
+            .and_register(V1Eip155Permit)
             .and_register(V1SolanaExact)
             .and_register(V2Eip155Exact)
+            .and_register(V2Eip155Permit)
             .and_register(V2SolanaExact);
 
         #[cfg(feature = "aptos")]

@@ -540,7 +540,7 @@ impl SignedMessage {
 ///   signature that the wallet contract will validate after deployment.
 /// - **EIP-1271 signatures**: plain contract (or EOA-style) signatures.
 #[derive(Debug, Clone)]
-enum StructuredSignature {
+pub enum StructuredSignature {
     /// An EIP-6492 wrapped signature.
     EIP6492 {
         /// Factory contract that can deploy the wallet deterministically
@@ -563,7 +563,7 @@ enum StructuredSignature {
 ///
 /// Any signature ending with this constant is treated as a 6492-wrapped
 /// signature; the preceding bytes are ABI-decoded as `(address factory, bytes factoryCalldata, bytes innerSig)`.
-const EIP6492_MAGIC_SUFFIX: [u8; 32] =
+pub const EIP6492_MAGIC_SUFFIX: [u8; 32] =
     hex!("6492649264926492649264926492649264926492649264926492649264926492");
 
 sol! {
