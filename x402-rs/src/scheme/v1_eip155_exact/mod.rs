@@ -384,7 +384,9 @@ pub async fn assert_domain<P: Provider>(
     let version = if let Some(version) = version {
         version
     } else {
-        token_contract
+        // Try to fetch version from contract, fallback to "1" if not available.
+        // Many EIP-2612 tokens don't expose version() but use "1" per the spec.
+        match token_contract
             .version()
             .call()
             .into_future()
@@ -392,7 +394,14 @@ pub async fn assert_domain<P: Provider>(
                 "fetch_eip712_version",
                 otel.kind = "client",
             ))
-            .await?
+            .await
+        {
+            Ok(v) => v,
+            Err(_) => {
+                tracing::debug!("Token does not expose version(), defaulting to \"1\"");
+                "1".to_string()
+            }
+        }
     };
     let domain = eip712_domain! {
         name: name,
