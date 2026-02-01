@@ -22,12 +22,12 @@
 //! - EIP-1271 support for deployed smart wallet signatures
 //! - EOA signature support with split (v, r, s) components
 //! - On-chain balance and nonce verification before settlement
-//! - Atomic settlement via Multicall3 (permit + transferFrom)
+//! - Atomic settlement via PermitExecutor contract
 
 pub mod client;
 pub mod types;
 
-use alloy_primitives::U256;
+use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use alloy_sol_types::Eip712Domain;
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ use crate::scheme::v1_eip155_exact::{
     Eip155ExactError, IEIP3009, assert_domain, assert_enough_balance, assert_enough_value,
 };
 use crate::scheme::v1_eip155_permit::{
-    PermitEvmPayment, assert_deadline, settle_payment, verify_payment,
+    PermitEvmPayment, PERMIT_EXECUTOR_BASE, assert_deadline, settle_payment, verify_payment,
 };
 use crate::scheme::{
     X402SchemeFacilitator, X402SchemeFacilitatorBuilder, X402SchemeFacilitatorError, X402SchemeId,
@@ -117,20 +117,30 @@ where
     fn build(
         &self,
         provider: P,
-        _config: Option<serde_json::Value>,
+        config: Option<serde_json::Value>,
     ) -> Result<Box<dyn X402SchemeFacilitator>, Box<dyn std::error::Error>> {
-        Ok(Box::new(V2Eip155PermitFacilitator::new(provider)))
+        // Extract PermitExecutor address from config, or use default for Base
+        let permit_executor = config
+            .as_ref()
+            .and_then(|c| c.get("permitExecutor"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.parse::<Address>())
+            .transpose()?
+            .unwrap_or(PERMIT_EXECUTOR_BASE);
+
+        Ok(Box::new(V2Eip155PermitFacilitator::new(provider, permit_executor)))
     }
 }
 
 pub struct V2Eip155PermitFacilitator<P> {
     provider: P,
+    permit_executor: Address,
 }
 
 impl<P> V2Eip155PermitFacilitator<P> {
-    /// Creates a new facilitator with the given provider.
-    pub fn new(provider: P) -> Self {
-        Self { provider }
+    /// Creates a new facilitator with the given provider and PermitExecutor address.
+    pub fn new(provider: P, permit_executor: Address) -> Self {
+        Self { provider, permit_executor }
     }
 }
 
@@ -151,7 +161,7 @@ where
         let (contract, payment, eip712_domain) = assert_valid_payment(
             self.provider.inner(),
             self.provider.chain(),
-            &self.provider.signer_addresses(),
+            &self.permit_executor,
             payload,
             requirements,
         )
@@ -159,6 +169,7 @@ where
 
         let payer = verify_payment(
             self.provider.inner(),
+            &self.permit_executor,
             &contract,
             &payment,
             &eip712_domain,
@@ -178,7 +189,7 @@ where
         let (contract, payment, eip712_domain) = assert_valid_payment(
             self.provider.inner(),
             self.provider.chain(),
-            &self.provider.signer_addresses(),
+            &self.permit_executor,
             payload,
             requirements,
         )
@@ -186,6 +197,7 @@ where
 
         let tx_hash = settle_payment(
             &self.provider,
+            &self.permit_executor,
             &contract,
             &payment,
             &eip712_domain,
@@ -211,7 +223,8 @@ where
         }];
         let signers = {
             let mut signers = HashMap::with_capacity(1);
-            signers.insert(chain_id, self.provider.signer_addresses());
+            // Return PermitExecutor address as the signer for permit scheme
+            signers.insert(chain_id, vec![self.permit_executor.to_string()]);
             signers
         };
         Ok(proto::SupportedResponse {
@@ -224,7 +237,7 @@ where
 
 /// Runs all preconditions needed for a successful permit payment:
 /// - Valid scheme, network, and receiver.
-/// - Spender must be the facilitator.
+/// - Spender must be the PermitExecutor contract.
 /// - Nonce matches on-chain nonce.
 /// - Valid deadline (not expired).
 /// - Correct EIP-712 domain construction.
@@ -234,7 +247,7 @@ where
 async fn assert_valid_payment<P: Provider>(
     provider: P,
     chain: &Eip155ChainReference,
-    facilitator_signers: &[String],
+    permit_executor: &Address,
     payload: &types::PaymentPayload,
     requirements: &types::PaymentRequirements,
 ) -> Result<(IEIP3009::IEIP3009Instance<P>, PermitEvmPayment, Eip712Domain), Eip155ExactError> {
@@ -252,10 +265,8 @@ async fn assert_valid_payment<P: Provider>(
 
     let authorization = &payload_inner.authorization;
 
-    // Verify spender is the facilitator
-    let spender_str = authorization.spender.to_string();
-    let is_valid_spender = facilitator_signers.iter().any(|s| s.eq_ignore_ascii_case(&spender_str));
-    if !is_valid_spender {
+    // Verify spender is the PermitExecutor contract
+    if authorization.spender != *permit_executor {
         return Err(PaymentVerificationError::InvalidSpender.into());
     }
 

@@ -16,29 +16,27 @@
 //! - EIP-1271 support for deployed smart wallet signatures
 //! - EOA signature support with split (v, r, s) components
 //! - On-chain balance and nonce verification before settlement
-//! - Atomic settlement via Multicall3 (permit + transferFrom)
+//! - Atomic settlement via PermitExecutor contract
 //!
 //! # Settlement Flow
 //!
+//! The facilitator calls PermitExecutor which atomically executes:
 //! ```text
-//! Multicall3.aggregate3([
-//!     Call3 { target: token, callData: permit(owner, spender, value, deadline, sig) },
-//!     Call3 { target: token, callData: transferFrom(owner, pay_to, value) }
-//! ])
+//! PermitExecutor.executePermitTransfer(token, owner, value, deadline, v, r, s, payTo)
+//!     -> token.permit(owner, spender=PermitExecutor, value, deadline, v, r, s)
+//!     -> token.transferFrom(owner, payTo, value)
 //! ```
 //!
-//! For EIP-6492 counterfactual wallets (3 calls):
+//! For EIP-6492 counterfactual wallets:
 //! ```text
-//! Multicall3.aggregate3([
-//!     Call3 { target: factory, callData: deploy_wallet, allowFailure: true },
-//!     Call3 { target: token, callData: permit(...) },
-//!     Call3 { target: token, callData: transferFrom(...) }
-//! ])
+//! PermitExecutor.executeCounterfactualPermitTransfer(factory, factoryCalldata, ...)
+//!     -> factory.deploy(factoryCalldata)  // if wallet not deployed
+//!     -> token.permit(...)
+//!     -> token.transferFrom(...)
 //! ```
 
-use alloy_primitives::{Address, Bytes, TxHash, U256};
-use alloy_provider::bindings::IMulticall3;
-use alloy_provider::{MULTICALL3_ADDRESS, Provider};
+use alloy_primitives::{address, Address, Bytes, TxHash, U256, B256};
+use alloy_provider::Provider;
 use alloy_sol_types::{Eip712Domain, SolCall, SolStruct, sol};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -69,6 +67,61 @@ use crate::scheme::{
 use crate::timestamp::UnixTimestamp;
 
 pub use types::*;
+
+/// PermitExecutor contract address on Base mainnet
+/// Deployed at: https://basescan.org/address/0x8b60e6327ca1d15e858474aa1d3756b7270a8dfc
+pub const PERMIT_EXECUTOR_BASE: Address = address!("8b60e6327ca1d15e858474aa1d3756b7270a8dfc");
+
+sol! {
+    /// PermitExecutor contract interface for atomic permit + transferFrom execution
+    #[allow(dead_code)]
+    #[sol(rpc)]
+    interface IPermitExecutor {
+        function executePermitTransfer(
+            address token,
+            address tokenOwner,
+            uint256 value,
+            uint256 deadline,
+            uint8 v,
+            bytes32 r,
+            bytes32 s,
+            address payTo
+        ) external;
+
+        function executePermitTransferWithSignature(
+            address token,
+            address tokenOwner,
+            uint256 value,
+            uint256 deadline,
+            bytes calldata signature,
+            address payTo
+        ) external;
+
+        function executeCounterfactualPermitTransfer(
+            address factory,
+            bytes calldata factoryCalldata,
+            address token,
+            address tokenOwner,
+            uint256 value,
+            uint256 deadline,
+            bytes calldata signature,
+            address payTo
+        ) external;
+
+        function executeCounterfactualPermitTransferSplit(
+            address factory,
+            bytes calldata factoryCalldata,
+            address token,
+            address tokenOwner,
+            uint256 value,
+            uint256 deadline,
+            uint8 v,
+            bytes32 r,
+            bytes32 s,
+            address payTo
+        ) external;
+    }
+}
 
 pub struct V1Eip155Permit;
 
@@ -134,20 +187,30 @@ where
     fn build(
         &self,
         provider: P,
-        _config: Option<serde_json::Value>,
+        config: Option<serde_json::Value>,
     ) -> Result<Box<dyn X402SchemeFacilitator>, Box<dyn std::error::Error>> {
-        Ok(Box::new(V1Eip155PermitFacilitator::new(provider)))
+        // Extract PermitExecutor address from config, or use default for Base
+        let permit_executor = config
+            .as_ref()
+            .and_then(|c| c.get("permitExecutor"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.parse::<Address>())
+            .transpose()?
+            .unwrap_or(PERMIT_EXECUTOR_BASE);
+
+        Ok(Box::new(V1Eip155PermitFacilitator::new(provider, permit_executor)))
     }
 }
 
 pub struct V1Eip155PermitFacilitator<P> {
     provider: P,
+    permit_executor: Address,
 }
 
 impl<P> V1Eip155PermitFacilitator<P> {
-    /// Creates a new facilitator with the given provider.
-    pub fn new(provider: P) -> Self {
-        Self { provider }
+    /// Creates a new facilitator with the given provider and PermitExecutor address.
+    pub fn new(provider: P, permit_executor: Address) -> Self {
+        Self { provider, permit_executor }
     }
 }
 
@@ -168,7 +231,7 @@ where
         let (contract, payment, eip712_domain) = assert_valid_payment(
             self.provider.inner(),
             self.provider.chain(),
-            &self.provider.signer_addresses(),
+            &self.permit_executor,
             payload,
             requirements,
         )
@@ -176,6 +239,7 @@ where
 
         let payer = verify_payment(
             self.provider.inner(),
+            &self.permit_executor,
             &contract,
             &payment,
             &eip712_domain,
@@ -196,7 +260,7 @@ where
         let (contract, payment, eip712_domain) = assert_valid_payment(
             self.provider.inner(),
             self.provider.chain(),
-            &self.provider.signer_addresses(),
+            &self.permit_executor,
             payload,
             requirements,
         )
@@ -204,6 +268,7 @@ where
 
         let tx_hash = settle_payment(
             &self.provider,
+            &self.permit_executor,
             &contract,
             &payment,
             &eip712_domain,
@@ -235,7 +300,9 @@ where
         };
         let signers = {
             let mut signers = HashMap::with_capacity(1);
-            signers.insert(chain_id, self.provider.signer_addresses());
+            // Return PermitExecutor address as the signer for permit scheme
+            // Clients must use this address as the spender when signing permits
+            signers.insert(chain_id, vec![self.permit_executor.to_string()]);
             signers
         };
         Ok(proto::SupportedResponse {
@@ -251,7 +318,7 @@ where
 pub struct PermitEvmPayment {
     /// Token owner (payer) who grants the approval.
     pub owner: Address,
-    /// Spender who is authorized to transfer (must be facilitator).
+    /// Spender who is authorized to transfer (must be PermitExecutor contract).
     pub spender: Address,
     /// Approval amount (token units).
     pub value: U256,
@@ -319,7 +386,7 @@ impl SignedPermitMessage {
 
 /// Runs all preconditions needed for a successful permit payment:
 /// - Valid scheme, network, and receiver.
-/// - Spender must be the facilitator.
+/// - Spender must be the PermitExecutor contract.
 /// - Nonce matches on-chain nonce.
 /// - Valid deadline (not expired).
 /// - Correct EIP-712 domain construction.
@@ -329,7 +396,7 @@ impl SignedPermitMessage {
 async fn assert_valid_payment<'a, P: Provider>(
     provider: &'a P,
     chain: &Eip155ChainReference,
-    facilitator_signers: &[String],
+    permit_executor: &Address,
     payload: &types::PaymentPayload,
     requirements: &types::PaymentRequirements,
 ) -> Result<
@@ -354,10 +421,8 @@ async fn assert_valid_payment<'a, P: Provider>(
 
     let authorization = &payload.payload.authorization;
 
-    // Verify spender is the facilitator
-    let spender_str = authorization.spender.to_string();
-    let is_valid_spender = facilitator_signers.iter().any(|s| s.eq_ignore_ascii_case(&spender_str));
-    if !is_valid_spender {
+    // Verify spender is the PermitExecutor contract
+    if authorization.spender != *permit_executor {
         return Err(PaymentVerificationError::InvalidSpender.into());
     }
 
@@ -417,105 +482,86 @@ pub fn assert_deadline(deadline: UnixTimestamp) -> Result<(), PaymentVerificatio
     Ok(())
 }
 
-/// Check whether contract code is present at `address`.
-async fn is_contract_deployed<P: Provider>(
-    provider: &P,
-    address: &Address,
-) -> Result<bool, alloy_transport::TransportError> {
-    let bytes = provider
-        .get_code_at(*address)
-        .into_future()
-        .instrument(tracing::info_span!("get_code_at",
-            address = %address,
-            otel.kind = "client",
-        ))
-        .await?;
-    Ok(!bytes.is_empty())
-}
-
 pub async fn verify_payment<P: Provider>(
     provider: &P,
+    permit_executor: &Address,
     contract: &IEIP3009::IEIP3009Instance<&P>,
     payment: &PermitEvmPayment,
     eip712_domain: &Eip712Domain,
     pay_to: Address,
 ) -> Result<Address, Eip155ExactError> {
     let signed_message = SignedPermitMessage::extract(payment, eip712_domain)?;
-
     let payer = signed_message.address;
-    let hash = signed_message.hash;
+    let executor = IPermitExecutor::new(*permit_executor, provider);
 
     match signed_message.signature {
         StructuredSignature::EIP6492 {
+            ref factory,
+            ref factory_calldata,
             ref inner,
             ref original,
-            ..
         } => {
-            // Prepare the call to validate EIP-6492 signature
+            // First validate the EIP-6492 signature
             let validator6492 = Validator6492::new(VALIDATOR_ADDRESS, provider);
-            let is_valid_signature_call =
-                validator6492.isValidSigWithSideEffects(payer, hash, original.clone());
+            let is_valid = validator6492
+                .isValidSigWithSideEffects(payer, signed_message.hash, original.clone())
+                .call()
+                .into_future()
+                .instrument(tracing::info_span!("validate_eip6492_signature",
+                    owner = %payment.owner,
+                    otel.kind = "client",
+                ))
+                .await
+                .map_err(|e| PaymentVerificationError::InvalidSignature(e.to_string()))?;
 
-            // Build permit call with inner signature
-            let permit_call = contract.permit_0(
-                payment.owner,
-                payment.spender,
-                payment.value,
-                U256::from(payment.deadline.as_secs()),
-                inner.clone(),
-            );
+            if !is_valid {
+                return Err(PaymentVerificationError::InvalidSignature(
+                    "Chain reported EIP-6492 signature to be invalid".to_string(),
+                )
+                .into());
+            }
 
-            // Build transferFrom call
-            let transfer_call = contract.transferFrom(payment.owner, pay_to, payment.value);
-
-            // Execute all calls in a single transaction simulation
-            let (is_valid_signature_result, _permit_result, _transfer_result) = provider
-                .multicall()
-                .add(is_valid_signature_call)
-                .add(permit_call)
-                .add(transfer_call)
-                .aggregate3()
-                .instrument(tracing::info_span!("verify_permit_eip6492",
+            // Simulate executeCounterfactualPermitTransfer via PermitExecutor
+            executor
+                .executeCounterfactualPermitTransfer(
+                    *factory,
+                    factory_calldata.clone(),
+                    *contract.address(),
+                    payment.owner,
+                    payment.value,
+                    U256::from(payment.deadline.as_secs()),
+                    inner.clone(),
+                    pay_to,
+                )
+                .call()
+                .into_future()
+                .instrument(tracing::info_span!("verify_permit_via_executor",
                     owner = %payment.owner,
                     spender = %payment.spender,
                     value = %payment.value,
                     deadline = %payment.deadline.as_secs(),
+                    pay_to = %pay_to,
                     token_contract = %contract.address(),
+                    sig_kind = "EIP6492",
                     otel.kind = "client",
                 ))
-                .await?;
-
-            let is_valid_signature_result = is_valid_signature_result
-                .map_err(|e| PaymentVerificationError::InvalidSignature(e.to_string()))?;
-            if !is_valid_signature_result {
-                return Err(PaymentVerificationError::InvalidSignature(
-                    "Chain reported signature to be invalid".to_string(),
-                )
-                .into());
-            }
-            _permit_result.map_err(|e| PaymentVerificationError::TransactionSimulation(e.to_string()))?;
-            _transfer_result.map_err(|e| PaymentVerificationError::TransactionSimulation(e.to_string()))?;
+                .await
+                .map_err(|e| PaymentVerificationError::TransactionSimulation(e.to_string()))?;
         }
         StructuredSignature::EIP1271(ref sig) => {
-            // Build permit call with EIP-1271 signature
-            let permit_call = contract.permit_0(
-                payment.owner,
-                payment.spender,
-                payment.value,
-                U256::from(payment.deadline.as_secs()),
-                sig.clone(),
-            );
-
-            // Build transferFrom call
-            let transfer_call = contract.transferFrom(payment.owner, pay_to, payment.value);
-
-            // Simulate permit + transferFrom via multicall
-            let (_permit_result, _transfer_result) = provider
-                .multicall()
-                .add(permit_call)
-                .add(transfer_call)
-                .aggregate3()
-                .instrument(tracing::info_span!("verify_permit_transferFrom",
+            // Simulate executePermitTransferWithSignature via PermitExecutor
+            executor
+                .executePermitTransferWithSignature(
+                    *contract.address(),
+                    payment.owner,
+                    payment.value,
+                    U256::from(payment.deadline.as_secs()),
+                    sig.clone(),
+                    pay_to,
+                )
+                .call()
+                .into_future()
+                .instrument(tracing::info_span!("verify_permit_via_executor",
                     owner = %payment.owner,
                     spender = %payment.spender,
                     value = %payment.value,
@@ -525,37 +571,41 @@ pub async fn verify_payment<P: Provider>(
                     sig_kind = "EIP1271",
                     otel.kind = "client",
                 ))
-                .await?;
-
-            _permit_result.map_err(|e| PaymentVerificationError::TransactionSimulation(e.to_string()))?;
-            _transfer_result.map_err(|e| PaymentVerificationError::TransactionSimulation(e.to_string()))?;
+                .await
+                .map_err(|e| PaymentVerificationError::TransactionSimulation(e.to_string()))?;
         }
         StructuredSignature::EOA(ref sig) => {
-            // Build permit call with EOA signature (v, r, s)
             let v = 27 + (sig.v() as u8);
-            let r = alloy_primitives::B256::from(sig.r());
-            let s = alloy_primitives::B256::from(sig.s());
+            let r = B256::from(sig.r());
+            let s = B256::from(sig.s());
 
-            let permit_call = contract.permit_1(
-                payment.owner,
-                payment.spender,
-                payment.value,
-                U256::from(payment.deadline.as_secs()),
-                v,
-                r,
-                s,
+            tracing::debug!(
+                owner = %payment.owner,
+                spender = %payment.spender,
+                value = %payment.value,
+                nonce = %payment.nonce,
+                deadline = %payment.deadline.as_secs(),
+                v = v,
+                r = %r,
+                s = %s,
+                "permit parameters for EOA signature"
             );
 
-            // Build transferFrom call
-            let transfer_call = contract.transferFrom(payment.owner, pay_to, payment.value);
-
-            // Simulate permit + transferFrom via multicall
-            let (_permit_result, _transfer_result) = provider
-                .multicall()
-                .add(permit_call)
-                .add(transfer_call)
-                .aggregate3()
-                .instrument(tracing::info_span!("verify_permit_transferFrom",
+            // Simulate executePermitTransfer via PermitExecutor
+            executor
+                .executePermitTransfer(
+                    *contract.address(),
+                    payment.owner,
+                    payment.value,
+                    U256::from(payment.deadline.as_secs()),
+                    v,
+                    r,
+                    s,
+                    pay_to,
+                )
+                .call()
+                .into_future()
+                .instrument(tracing::info_span!("verify_permit_via_executor",
                     owner = %payment.owner,
                     spender = %payment.spender,
                     value = %payment.value,
@@ -565,63 +615,20 @@ pub async fn verify_payment<P: Provider>(
                     sig_kind = "EOA",
                     otel.kind = "client",
                 ))
-                .await?;
-
-            _permit_result.map_err(|e| PaymentVerificationError::TransactionSimulation(e.to_string()))?;
-            _transfer_result.map_err(|e| PaymentVerificationError::TransactionSimulation(e.to_string()))?;
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "PermitExecutor simulation failed");
+                    PaymentVerificationError::TransactionSimulation(e.to_string())
+                })?;
         }
     }
 
     Ok(payer)
 }
 
-/// Build permit calldata based on signature type
-fn build_permit_calldata(payment: &PermitEvmPayment, signature: &StructuredSignature) -> Bytes {
-    match signature {
-        StructuredSignature::EOA(sig) => {
-            let v = 27 + (sig.v() as u8);
-            let r = alloy_primitives::B256::from(sig.r());
-            let s = alloy_primitives::B256::from(sig.s());
-            IEIP3009::permit_1Call {
-                owner: payment.owner,
-                spender: payment.spender,
-                value: payment.value,
-                deadline: U256::from(payment.deadline.as_secs()),
-                v,
-                r,
-                s,
-            }
-            .abi_encode()
-            .into()
-        }
-        StructuredSignature::EIP1271(sig) => {
-            IEIP3009::permit_0Call {
-                owner: payment.owner,
-                spender: payment.spender,
-                value: payment.value,
-                deadline: U256::from(payment.deadline.as_secs()),
-                signature: sig.clone(),
-            }
-            .abi_encode()
-            .into()
-        }
-        StructuredSignature::EIP6492 { inner, .. } => {
-            // For EIP-6492, use the inner signature with the bytes variant
-            IEIP3009::permit_0Call {
-                owner: payment.owner,
-                spender: payment.spender,
-                value: payment.value,
-                deadline: U256::from(payment.deadline.as_secs()),
-                signature: inner.clone(),
-            }
-            .abi_encode()
-            .into()
-        }
-    }
-}
-
 pub async fn settle_payment<P, E>(
     provider: &P,
+    permit_executor: &Address,
     contract: &IEIP3009::IEIP3009Instance<&P::Inner>,
     payment: &PermitEvmPayment,
     eip712_domain: &Eip712Domain,
@@ -632,164 +639,84 @@ where
     Eip155ExactError: From<E>,
 {
     let signed_message = SignedPermitMessage::extract(payment, eip712_domain)?;
-    let payer = payment.owner;
 
-    // Build permit calldata
-    let permit_calldata = build_permit_calldata(payment, &signed_message.signature);
-
-    // Build transferFrom calldata
-    let transfer_from_call = IEIP3009::transferFromCall {
-        from: payment.owner,
-        to: pay_to,
-        value: payment.value,
-    };
-    let transfer_calldata: Bytes = transfer_from_call.abi_encode().into();
-
-    let transaction_receipt_fut = match signed_message.signature {
+    // Build calldata for PermitExecutor based on signature type
+    let (calldata, sig_kind): (Bytes, &str) = match signed_message.signature {
         StructuredSignature::EIP6492 {
             factory,
             factory_calldata,
             inner,
             original: _,
         } => {
-            let is_contract_deployed = is_contract_deployed(provider.inner(), &payer).await?;
-
-            // Build permit call with inner signature
-            let inner_permit_calldata: Bytes = IEIP3009::permit_0Call {
-                owner: payment.owner,
-                spender: payment.spender,
+            let call = IPermitExecutor::executeCounterfactualPermitTransferCall {
+                factory,
+                factoryCalldata: factory_calldata,
+                token: *contract.address(),
+                tokenOwner: payment.owner,
                 value: payment.value,
                 deadline: U256::from(payment.deadline.as_secs()),
                 signature: inner,
-            }
-            .abi_encode()
-            .into();
-
-            if is_contract_deployed {
-                // Wallet already deployed: permit + transferFrom
-                let permit_call = IMulticall3::Call3 {
-                    allowFailure: false,
-                    target: *contract.address(),
-                    callData: inner_permit_calldata,
-                };
-                let transfer_call = IMulticall3::Call3 {
-                    allowFailure: false,
-                    target: *contract.address(),
-                    callData: transfer_calldata,
-                };
-                let aggregate_call = IMulticall3::aggregate3Call {
-                    calls: vec![permit_call, transfer_call],
-                };
-                Eip155MetaTransactionProvider::send_transaction(
-                    provider,
-                    MetaTransaction {
-                        to: MULTICALL3_ADDRESS,
-                        calldata: aggregate_call.abi_encode().into(),
-                        confirmations: 1,
-                    },
-                )
-                .instrument(
-                    tracing::info_span!("settle_permit_transferFrom",
-                        owner = %payment.owner,
-                        spender = %payment.spender,
-                        value = %payment.value,
-                        deadline = %payment.deadline.as_secs(),
-                        pay_to = %pay_to,
-                        token_contract = %contract.address(),
-                        sig_kind="EIP6492.deployed",
-                        otel.kind = "client",
-                    ),
-                )
-            } else {
-                // Deploy wallet, permit, transferFrom
-                let deployment_call = IMulticall3::Call3 {
-                    allowFailure: true,
-                    target: factory,
-                    callData: factory_calldata,
-                };
-                let permit_call = IMulticall3::Call3 {
-                    allowFailure: false,
-                    target: *contract.address(),
-                    callData: inner_permit_calldata,
-                };
-                let transfer_call = IMulticall3::Call3 {
-                    allowFailure: false,
-                    target: *contract.address(),
-                    callData: transfer_calldata,
-                };
-                let aggregate_call = IMulticall3::aggregate3Call {
-                    calls: vec![deployment_call, permit_call, transfer_call],
-                };
-                Eip155MetaTransactionProvider::send_transaction(
-                    provider,
-                    MetaTransaction {
-                        to: MULTICALL3_ADDRESS,
-                        calldata: aggregate_call.abi_encode().into(),
-                        confirmations: 1,
-                    },
-                )
-                .instrument(
-                    tracing::info_span!("settle_permit_transferFrom",
-                        owner = %payment.owner,
-                        spender = %payment.spender,
-                        value = %payment.value,
-                        deadline = %payment.deadline.as_secs(),
-                        pay_to = %pay_to,
-                        token_contract = %contract.address(),
-                        sig_kind="EIP6492.counterfactual",
-                        otel.kind = "client",
-                    ),
-                )
-            }
+                payTo: pay_to,
+            };
+            (call.abi_encode().into(), "EIP6492")
         }
-        StructuredSignature::EIP1271(_) | StructuredSignature::EOA(_) => {
-            // permit + transferFrom via multicall
-            let permit_call = IMulticall3::Call3 {
-                allowFailure: false,
-                target: *contract.address(),
-                callData: permit_calldata,
+        StructuredSignature::EIP1271(sig) => {
+            let call = IPermitExecutor::executePermitTransferWithSignatureCall {
+                token: *contract.address(),
+                tokenOwner: payment.owner,
+                value: payment.value,
+                deadline: U256::from(payment.deadline.as_secs()),
+                signature: sig,
+                payTo: pay_to,
             };
-            let transfer_call = IMulticall3::Call3 {
-                allowFailure: false,
-                target: *contract.address(),
-                callData: transfer_calldata,
+            (call.abi_encode().into(), "EIP1271")
+        }
+        StructuredSignature::EOA(sig) => {
+            let v = 27 + (sig.v() as u8);
+            let r = B256::from(sig.r());
+            let s = B256::from(sig.s());
+
+            let call = IPermitExecutor::executePermitTransferCall {
+                token: *contract.address(),
+                tokenOwner: payment.owner,
+                value: payment.value,
+                deadline: U256::from(payment.deadline.as_secs()),
+                v,
+                r,
+                s,
+                payTo: pay_to,
             };
-            let aggregate_call = IMulticall3::aggregate3Call {
-                calls: vec![permit_call, transfer_call],
-            };
-            let sig_kind = match signed_message.signature {
-                StructuredSignature::EOA(_) => "EOA",
-                StructuredSignature::EIP1271(_) => "EIP1271",
-                _ => unreachable!(),
-            };
-            Eip155MetaTransactionProvider::send_transaction(
-                provider,
-                MetaTransaction {
-                    to: MULTICALL3_ADDRESS,
-                    calldata: aggregate_call.abi_encode().into(),
-                    confirmations: 1,
-                },
-            )
-            .instrument(tracing::info_span!("settle_permit_transferFrom",
-                owner = %payment.owner,
-                spender = %payment.spender,
-                value = %payment.value,
-                deadline = %payment.deadline.as_secs(),
-                pay_to = %pay_to,
-                token_contract = %contract.address(),
-                sig_kind = sig_kind,
-                otel.kind = "client",
-            ))
+            (call.abi_encode().into(), "EOA")
         }
     };
 
-    let receipt = transaction_receipt_fut.await?;
-    let success = receipt.status();
-    if success {
+    // Send transaction to PermitExecutor
+    let receipt = Eip155MetaTransactionProvider::send_transaction(
+        provider,
+        MetaTransaction {
+            to: *permit_executor,
+            calldata,
+            confirmations: 1,
+        },
+    )
+    .instrument(tracing::info_span!("settle_permit_via_executor",
+        owner = %payment.owner,
+        spender = %payment.spender,
+        value = %payment.value,
+        deadline = %payment.deadline.as_secs(),
+        pay_to = %pay_to,
+        token_contract = %contract.address(),
+        permit_executor = %permit_executor,
+        sig_kind = sig_kind,
+        otel.kind = "client",
+    ))
+    .await?;
+
+    if receipt.status() {
         tracing::event!(Level::INFO,
             status = "ok",
             tx = %receipt.transaction_hash,
-            "permit + transferFrom succeeded"
+            "PermitExecutor settlement succeeded"
         );
         Ok(receipt.transaction_hash)
     } else {
@@ -797,7 +724,7 @@ where
             Level::WARN,
             status = "failed",
             tx = %receipt.transaction_hash,
-            "permit + transferFrom failed"
+            "PermitExecutor settlement failed"
         );
         Err(Eip155ExactError::TransactionReverted(
             receipt.transaction_hash,

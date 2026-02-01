@@ -122,14 +122,30 @@ pub struct Eip2612SigningParams {
 ///
 /// The caller must provide the correct `nonce` fetched from the token contract.
 /// EIP-2612 uses sequential nonces, not random ones like EIP-3009.
+///
+/// # EIP-712 Domain
+///
+/// The `extra` field MUST contain the token's EIP-712 domain name and version.
+/// These values must match what the token contract uses for its domain separator.
+/// If not provided, this function will return an error.
+///
+/// For most EIP-2612 tokens:
+/// - `name` should match the token's `name()` function
+/// - `version` is typically "1" (many tokens don't expose a `version()` function)
 #[allow(dead_code)] // Public for consumption by downstream crates.
 pub async fn sign_eip2612_permit<S: SignerLike + Sync>(
     signer: &S,
     params: &Eip2612SigningParams,
 ) -> Result<PermitEvmPayload, X402Error> {
-    // Extract name/version from extra, defaulting to empty strings
+    // Extract name/version from extra - these MUST be provided for permit scheme
+    // since the EIP-712 domain must match what the token contract uses.
     let (name, version) = match &params.extra {
-        None => ("".to_string(), "".to_string()),
+        None => {
+            return Err(X402Error::SigningError(
+                "Permit scheme requires 'extra' field with EIP-712 domain 'name' and 'version'. \
+                 These must match the token contract's domain separator.".to_string()
+            ));
+        }
         Some(extra) => (extra.name.clone(), extra.version.clone()),
     };
 
