@@ -4,7 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+use tower_governor::{governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -92,9 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .allow_headers(tower_http::cors::Any)
     };
 
-    // Rate limiting configs (per IP)
+    // Rate limiting configs (per IP) - use SmartIpKeyExtractor for proxy support
     // Auth: 10 requests per minute
     let auth_governor = GovernorConfigBuilder::default()
+        .key_extractor(SmartIpKeyExtractor)
         .per_second(6) // ~10 per minute = 1 every 6 seconds burst
         .burst_size(10)
         .finish()
@@ -102,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Write: 10 requests per minute
     let write_governor = GovernorConfigBuilder::default()
+        .key_extractor(SmartIpKeyExtractor)
         .per_second(6)
         .burst_size(10)
         .finish()
@@ -109,6 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Read: 30 requests per minute
     let read_governor = GovernorConfigBuilder::default()
+        .key_extractor(SmartIpKeyExtractor)
         .per_second(2) // ~30 per minute
         .burst_size(30)
         .finish()
