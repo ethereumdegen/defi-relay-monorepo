@@ -23,8 +23,9 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the binary
+# Copy binaries
 COPY --from=builder /app/target/release/keystore-server /app/
+COPY --from=builder /app/target/release/migrate /app/
 
 # Copy migrations for runtime migrations
 COPY migrations /app/migrations
