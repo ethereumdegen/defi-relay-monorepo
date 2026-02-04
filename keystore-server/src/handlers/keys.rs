@@ -1,10 +1,12 @@
 use axum::{
     extract::State,
     http::{header, HeaderMap, StatusCode},
+    response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 
+use crate::middleware::require_x402_payment;
 use crate::services::{backup::BackupService, session::SessionService};
 use crate::AppState;
 
@@ -75,20 +77,64 @@ async fn validate_session(
         })
 }
 
+/// Minimum encrypted data size (hex chars) - prevents spam with tiny payloads
+/// 100 bytes = 200 hex chars (ECIES overhead alone is ~113 bytes)
+const MIN_ENCRYPTED_DATA_HEX_LEN: usize = 200;
+
 /// POST /api/store_keys - Store encrypted backup
+/// Requires x402 payment if configured (X402_WALLET_ADDRESS set)
 pub async fn store_keys(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<StoreKeysRequest>,
-) -> Result<Json<StoreKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let wallet_id = validate_session(&state.pool, &headers).await?;
+) -> Result<Json<StoreKeysResponse>, axum::response::Response> {
+    // Validate session first
+    let wallet_id = validate_session(&state.pool, &headers).await.map_err(|e| e.into_response())?;
+
+    // Check for x402 payment if configured (capture tx_hash for audit)
+    let payment_tx: Option<String> = if let Some(ref x402_config) = state.config.x402 {
+        require_x402_payment(
+            &state.http_client,
+            x402_config,
+            &headers,
+            "/api/store_keys",
+            "Store encrypted backup to keystore",
+        )
+        .await?
+    } else {
+        None
+    };
+
+    // Validate encrypted_data is not empty (use DELETE endpoint to remove backup)
+    if payload.encrypted_data.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                error: "Cannot store empty data. Use DELETE /api/delete_keys to remove backup.".to_string(),
+            }),
+        ).into_response());
+    }
+
+    // Validate minimum size (prevents spam with tiny payloads)
+    if payload.encrypted_data.len() < MIN_ENCRYPTED_DATA_HEX_LEN {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                error: format!(
+                    "encrypted_data too small (minimum {} bytes)",
+                    MIN_ENCRYPTED_DATA_HEX_LEN / 2
+                ),
+            }),
+        ).into_response());
+    }
 
     // Validate encrypted_data format (should be hex)
-    if payload.encrypted_data.is_empty()
-        || !payload
-            .encrypted_data
-            .chars()
-            .all(|c| c.is_ascii_hexdigit())
+    if !payload
+        .encrypted_data
+        .chars()
+        .all(|c| c.is_ascii_hexdigit())
     {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -96,7 +142,7 @@ pub async fn store_keys(
                 success: false,
                 error: "Invalid encrypted_data format (expected hex string)".to_string(),
             }),
-        ));
+        ).into_response());
     }
 
     // Check size limit
@@ -110,23 +156,30 @@ pub async fn store_keys(
                     state.config.max_encrypted_data_size
                 ),
             }),
-        ));
+        ).into_response());
     }
 
-    let key_count = payload.key_count.unwrap_or(0);
+    // Validate key_count (ensure non-negative)
+    let key_count = payload.key_count.unwrap_or(0).max(0);
 
-    let backup = BackupService::upsert(&state.pool, &wallet_id, &payload.encrypted_data, key_count)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to store backup: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
-        })?;
+    let backup = BackupService::upsert(
+        &state.pool,
+        &wallet_id,
+        &payload.encrypted_data,
+        key_count,
+        payment_tx.as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to store backup: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                error: "Database error".to_string(),
+            }),
+        ).into_response()
+    })?;
 
     Ok(Json(StoreKeysResponse {
         success: true,
@@ -171,4 +224,97 @@ pub async fn get_keys(
         key_count: backup.key_count,
         updated_at: backup.updated_at.to_rfc3339(),
     }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteKeysResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// POST /api/delete_keys - Delete backup (authenticated, free - no x402 payment)
+pub async fn delete_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<DeleteKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet_id = validate_session(&state.pool, &headers).await?;
+
+    let deleted = BackupService::delete(&state.pool, &wallet_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete backup: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    success: false,
+                    error: "Database error".to_string(),
+                }),
+            )
+        })?;
+
+    if deleted {
+        Ok(Json(DeleteKeysResponse {
+            success: true,
+            message: "Backup deleted".to_string(),
+        }))
+    } else {
+        Ok(Json(DeleteKeysResponse {
+            success: true,
+            message: "No backup found to delete".to_string(),
+        }))
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct LogoutResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// POST /api/logout - Invalidate current session
+pub async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<LogoutResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Extract token from header
+    let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
+
+    let token = match auth_header {
+        Some(h) if h.starts_with("Bearer ") => &h[7..],
+        _ => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponse {
+                    success: false,
+                    error: "Missing or invalid Authorization header".to_string(),
+                }),
+            ))
+        }
+    };
+
+    let deleted = SessionService::delete(&state.pool, token)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete session: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    success: false,
+                    error: "Database error".to_string(),
+                }),
+            )
+        })?;
+
+    if deleted {
+        Ok(Json(LogoutResponse {
+            success: true,
+            message: "Logged out successfully".to_string(),
+        }))
+    } else {
+        // Token wasn't found, but that's okay - user is effectively logged out
+        Ok(Json(LogoutResponse {
+            success: true,
+            message: "Session already expired or invalid".to_string(),
+        }))
+    }
 }

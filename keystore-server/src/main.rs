@@ -23,6 +23,7 @@ use config::Config;
 pub struct AppState {
     pub pool: sqlx::PgPool,
     pub config: Arc<Config>,
+    pub http_client: reqwest::Client,
 }
 
 #[tokio::main]
@@ -56,10 +57,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     migrator.run(&pool).await?;
     tracing::info!("Migrations completed");
 
+    // Create HTTP client for x402 facilitator communication
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("Failed to create HTTP client");
+
+    // Log x402 payment status
+    if config.x402.is_some() {
+        tracing::info!("x402 payment enabled for store_keys endpoint");
+    } else {
+        tracing::info!("x402 payment disabled (free storage)");
+    }
+
     // Create app state
     let state = AppState {
         pool: pool.clone(),
         config: Arc::new(config.clone()),
+        http_client,
     };
 
     // Setup CORS with configured origins
@@ -119,6 +134,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let write_routes = Router::new()
         .route("/api/store_keys", post(handlers::keys::store_keys))
+        .route("/api/delete_keys", post(handlers::keys::delete_keys))
+        .route("/api/logout", post(handlers::keys::logout))
         .layer(GovernorLayer {
             config: Arc::new(write_governor),
         });
@@ -137,8 +154,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(write_routes)
         .merge(read_routes)
         .with_state(state)
-        // Request body limit: 2MB (encrypted data max is 1MB hex = 2MB chars)
-        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
+        // Request body limit: 21MB (encrypted data max is 10MB hex = 20MB chars + JSON overhead)
+        .layer(RequestBodyLimitLayer::new(21 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .layer(cors);
 

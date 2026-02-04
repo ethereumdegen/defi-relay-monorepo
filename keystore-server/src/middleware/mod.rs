@@ -1,3 +1,5 @@
 // Middleware module
-// Authentication is handled inline in handlers for simplicity
-// Can be extracted to middleware if rate limiting or other cross-cutting concerns are needed
+
+pub mod x402;
+
+pub use x402::require_x402_payment;

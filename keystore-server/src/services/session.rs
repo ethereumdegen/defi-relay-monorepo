@@ -61,4 +61,13 @@ impl SessionService {
             .await?;
         Ok(result.rows_affected())
     }
+
+    /// Delete a specific session (logout)
+    pub async fn delete(pool: &PgPool, token: &str) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(r#"DELETE FROM sessions WHERE token = $1"#)
+            .bind(token)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }

@@ -10,4 +10,8 @@ pub struct Backup {
     pub key_count: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Last payment transaction hash (for audit trail)
+    pub last_payment_tx: Option<String>,
+    /// When the last payment was made
+    pub last_payment_at: Option<DateTime<Utc>>,
 }

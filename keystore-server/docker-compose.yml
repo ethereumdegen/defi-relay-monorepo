@@ -1,0 +1,46 @@
+# Docker Compose for local development and self-hosting
+# Usage: docker-compose up -d
+
+version: '3.8'
+
+services:
+  keystore-server:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgres://postgres:password@db:5432/keystore
+      - KEYSTORE_DOMAIN=localhost
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3001
+      - SESSION_TTL_SECS=3600
+      - CHALLENGE_TTL_SECS=300
+      - MAX_ENCRYPTED_DATA_SIZE=10485760
+      - RUST_LOG=keystore_server=debug,tower_http=debug
+      # Uncomment to enable x402 payments:
+      # - X402_WALLET_ADDRESS=0xYourWallet
+      # - X402_FACILITATOR_SIGNER=0xFacilitatorSigner
+      # - X402_PAYMENT_TOKEN_ADDRESS=0xTokenAddress
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=keystore
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:

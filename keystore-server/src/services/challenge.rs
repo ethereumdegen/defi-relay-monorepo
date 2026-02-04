@@ -6,7 +6,7 @@ use crate::models::Challenge;
 pub struct ChallengeService;
 
 impl ChallengeService {
-    /// Create a new challenge, replacing any existing challenges for this wallet
+    /// Create a new challenge, replacing any existing challenges for this wallet (atomic upsert)
     pub async fn create(
         pool: &PgPool,
         wallet_id: &str,
@@ -14,17 +14,16 @@ impl ChallengeService {
         message: &str,
         expires_at: DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
-        // Delete any existing challenges for this wallet first (prevents accumulation attack)
-        sqlx::query(r#"DELETE FROM challenges WHERE wallet_id = $1"#)
-            .bind(wallet_id)
-            .execute(pool)
-            .await?;
-
-        // Insert new challenge
+        // Atomic upsert - prevents race condition between delete and insert
         sqlx::query(
             r#"
             INSERT INTO challenges (wallet_id, nonce, message, expires_at)
             VALUES ($1, $2, $3, $4)
+            ON CONFLICT (wallet_id) DO UPDATE SET
+                nonce = EXCLUDED.nonce,
+                message = EXCLUDED.message,
+                expires_at = EXCLUDED.expires_at,
+                created_at = NOW()
             "#,
         )
         .bind(wallet_id)
