@@ -52,7 +52,7 @@ pub fn payment_required_response(
     let requirements = build_payment_requirements(config, resource, description);
 
     let response = PaymentRequiredResponse {
-        x402_version: 2,
+        x402_version: 1,
         accepts: vec![requirements],
         error: None,
     };
@@ -79,7 +79,7 @@ fn build_verify_request(
         .map_err(|e| format!("Invalid payment payload JSON: {}", e))?;
 
     Ok(VerifyRequest {
-        x402_version: 2,
+        x402_version: 1,
         payment_payload,
         payment_requirements,
     })
