@@ -1,0 +1,29 @@
+name: keystore-server
+
+services:
+  - name: keystore-server
+    github:
+      repo: ethereumdegen/defi-relay-monorepo
+      branch: master
+      deploy_on_push: true
+    source_dir: /keystore-server
+    dockerfile_path: Dockerfile
+    http_port: 8080
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    routes:
+      - path: /
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+      - key: RUST_LOG
+        scope: RUN_TIME
+        value: keystore_server=info,tower_http=info
