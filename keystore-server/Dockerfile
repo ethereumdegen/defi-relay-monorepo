@@ -29,6 +29,6 @@ COPY --from=builder /app/target/release/keystore-server /app/
 # Copy migrations for runtime migrations
 COPY migrations /app/migrations
 
-EXPOSE 3000
+EXPOSE 8080
 
 CMD ["/app/keystore-server"]
