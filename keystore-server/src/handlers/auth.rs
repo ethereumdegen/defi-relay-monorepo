@@ -85,11 +85,33 @@ pub async fn authorize(
     let expires_at = now + Duration::seconds(state.config.challenge_ttl_secs);
 
     // Create SIWE message using time crate types
+    let domain = state.config.domain.clone().try_into().map_err(|e| {
+        tracing::error!("Invalid domain config '{}': {:?}", state.config.domain, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                error: "Server configuration error".to_string(),
+            }),
+        )
+    })?;
+
+    let uri = format!("https://{}", state.config.domain).parse().map_err(|e| {
+        tracing::error!("Invalid URI from domain '{}': {:?}", state.config.domain, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                error: "Server configuration error".to_string(),
+            }),
+        )
+    })?;
+
     let message = Message {
-        domain: state.config.domain.clone().try_into().unwrap(),
+        domain,
         address,
         statement: Some("Sign in to Keystore API".to_string()),
-        uri: format!("https://{}", state.config.domain).parse().unwrap(),
+        uri,
         version: siwe::Version::V1,
         chain_id: 1,
         nonce: nonce.clone(),
