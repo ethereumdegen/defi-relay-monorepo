@@ -1,0 +1,17 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Identity {
+    pub id: i32,
+    pub wallet_id: String,
+    pub identity_json: String,
+    pub content_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    /// Last payment transaction hash (for audit trail)
+    pub last_payment_tx: Option<String>,
+    /// When the last payment was made
+    pub last_payment_at: Option<DateTime<Utc>>,
+}
