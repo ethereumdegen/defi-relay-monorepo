@@ -137,6 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let read_routes = Router::new()
         .route("/api/get_identity", post(handlers::identity::get_identity))
         .route("/api/identity/:hash", get(handlers::identity::get_identity_by_hash))
+        .route("/api/identity/:hash/raw", get(handlers::identity::get_identity_raw))
         .layer(GovernorLayer {
             config: Arc::new(read_governor),
         });

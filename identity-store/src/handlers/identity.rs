@@ -170,7 +170,7 @@ pub async fn store_identity(
     })?;
 
     let base_url = &state.config.public_url;
-    let url = format!("{}/api/identity/{}", base_url, identity.content_hash);
+    let url = format!("{}/api/identity/{}/raw", base_url, identity.content_hash);
 
     Ok(Json(StoreIdentityResponse {
         success: true,
@@ -229,6 +229,58 @@ pub async fn get_identity_by_hash(
         wallet_id: identity.wallet_id,
         updated_at: identity.updated_at.to_rfc3339(),
     }))
+}
+
+/// GET /api/identity/:hash/raw - Public: get raw identity JSON (EIP-8004 compliant)
+///
+/// Returns just the identity_json content directly, not wrapped in a response envelope.
+/// This is the endpoint that agentURIs stored on-chain should point to, so any
+/// EIP-8004 client can fetch and parse the RegistrationFile directly.
+pub async fn get_identity_raw(
+    State(state): State<AppState>,
+    Path(hash): Path<String>,
+) -> Result<axum::response::Response, (StatusCode, Json<ErrorResponse>)> {
+    use axum::response::IntoResponse;
+
+    // Validate hash format (64 hex chars)
+    if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                error: "Invalid content hash format".to_string(),
+            }),
+        ));
+    }
+
+    let identity = IdentityService::get_by_hash(&state.pool, &hash)
+        .await
+        .map_err(|e| {
+            tracing::error!("Database error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    success: false,
+                    error: "Database error".to_string(),
+                }),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    success: false,
+                    error: "Identity not found".to_string(),
+                }),
+            )
+        })?;
+
+    // Return the raw identity JSON directly with application/json content type
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        identity.identity_json,
+    ).into_response())
 }
 
 /// POST /api/get_identity - Get your own identity (authenticated)
