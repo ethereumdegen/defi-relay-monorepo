@@ -9,15 +9,18 @@ pub struct KimiClient {
     endpoint: String,
     api_key: String,
     default_model: String,
+    /// "kimi" or "openai" — controls protocol differences
+    archetype: String,
 }
 
 impl KimiClient {
-    pub fn new(endpoint: &str, api_key: &str, default_model: &str) -> Self {
+    pub fn new(endpoint: &str, api_key: &str, default_model: &str, archetype: &str) -> Self {
         KimiClient {
             client: Client::new(),
             endpoint: endpoint.to_string(),
             api_key: api_key.to_string(),
             default_model: default_model.to_string(),
+            archetype: archetype.to_string(),
         }
     }
 
@@ -53,7 +56,16 @@ impl KimiClient {
 
         request_body["model"] = serde_json::Value::String(self.default_model.clone());
 
-        // Log the full request being sent to Kimi API
+        // Protocol adjustments based on archetype
+        if self.archetype == "openai" {
+            // OpenAI uses max_completion_tokens instead of max_tokens
+            if let Some(max_tokens) = request_body.get("max_tokens").and_then(|v| v.as_u64()) {
+                request_body["max_completion_tokens"] = serde_json::Value::Number(max_tokens.into());
+                request_body.as_object_mut().unwrap().remove("max_tokens");
+            }
+        }
+
+        // Log the full request being sent to API
         info!(
             ">>> KIMI API REQUEST:\n{}",
             serde_json::to_string_pretty(&request_body).unwrap_or_else(|_| format!("{:?}", request_body))

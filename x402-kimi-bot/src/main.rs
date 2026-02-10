@@ -175,6 +175,7 @@ async fn main() -> std::io::Result<()> {
         &config.moonshot_endpoint,
         &config.moonshot_api_key,
         &config.default_model,
+        &config.archetype,
     );
 
     // Create nonce tracker for replay protection (10 minute TTL)

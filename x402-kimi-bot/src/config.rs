@@ -16,6 +16,8 @@ pub struct Config {
     pub default_model: String,
     pub max_output_tokens: u32,
     pub system_prompt: Option<String>,
+    /// "kimi" or "openai" — controls protocol differences (e.g. max_tokens vs max_completion_tokens)
+    pub archetype: String,
 }
 
 impl Config {
@@ -67,6 +69,10 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        let archetype = env::var("RELAY_ARCHETYPE")
+            .unwrap_or_else(|_| "kimi".to_string())
+            .to_lowercase();
+
         Ok(Config {
             moonshot_endpoint,
             moonshot_api_key,
@@ -79,6 +85,7 @@ impl Config {
             default_model,
             max_output_tokens,
             system_prompt,
+            archetype,
         })
     }
 }
