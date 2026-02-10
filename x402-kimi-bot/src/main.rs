@@ -13,7 +13,7 @@ use std::sync::Arc;
 use config::Config;
 use handlers::{agent_info_handler, chat_handler};
 use middleware::X402Middleware;
-use services::{FacilitatorClient, KimiClient, NonceTracker, RateLimiter, SettlementQueue, SettlementWorker};
+use services::{FacilitatorClient, KimiClient, NonceTracker, RateLimiter, SettlementQueue, SettlementWorker, VerificationCache};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -78,9 +78,11 @@ async fn health_handler(
 async fn metrics_handler(
     settlement_queue: web::Data<Arc<SettlementQueue>>,
     worker_metrics: web::Data<Arc<services::SettlementMetrics>>,
+    verification_cache: web::Data<Arc<VerificationCache>>,
 ) -> HttpResponse {
     let (total, success, failure, retries) = worker_metrics.get_stats();
     let (pending, in_progress, completed, failed) = settlement_queue.get_status_counts();
+    let (cache_hits, cache_misses, cache_downgrades) = verification_cache.stats();
 
     HttpResponse::Ok().json(serde_json::json!({
         "settlement_queue": {
@@ -101,6 +103,16 @@ async fn metrics_handler(
             "success_count": success,
             "failure_count": failure,
             "retry_count": retries
+        },
+        "verification_cache": {
+            "hits": cache_hits,
+            "misses": cache_misses,
+            "downgrades": cache_downgrades,
+            "hit_rate": if cache_hits + cache_misses > 0 {
+                cache_hits as f64 / (cache_hits + cache_misses) as f64
+            } else {
+                0.0
+            }
         }
     }))
 }
@@ -186,6 +198,10 @@ async fn main() -> std::io::Result<()> {
     let rate_limiter = Arc::new(RateLimiter::new(5));
     info!("Rate limiter initialized: 5 requests/second per address");
 
+    // Create verification cache (skip facilitator round-trip for repeat callers)
+    let verification_cache = Arc::new(VerificationCache::with_default_ttl());
+    info!("Verification cache initialized (30s TTL)");
+
     // Create persistent settlement queue backed by SQLite
     let max_queue_size = std::env::var("SETTLEMENT_QUEUE_MAX_SIZE")
         .ok()
@@ -225,8 +241,10 @@ async fn main() -> std::io::Result<()> {
     let nonce_tracker_for_middleware = nonce_tracker.clone();
     let settlement_queue_for_middleware = settlement_queue.clone();
     let rate_limiter_for_middleware = rate_limiter.clone();
+    let verification_cache_for_middleware = verification_cache.clone();
     let settlement_queue_for_app = settlement_queue.clone();
     let worker_metrics_for_app = worker_metrics.clone();
+    let verification_cache_for_app = verification_cache.clone();
 
     // Clone shutdown_tx for the shutdown handler
     let shutdown_tx_clone = shutdown_tx.clone();
@@ -253,6 +271,7 @@ async fn main() -> std::io::Result<()> {
             // Share settlement queue and metrics for observability
             .app_data(web::Data::new(settlement_queue_for_app.clone()))
             .app_data(web::Data::new(worker_metrics_for_app.clone()))
+            .app_data(web::Data::new(verification_cache_for_app.clone()))
             // Public endpoints (no payment required)
             .route("/", web::get().to(root_handler))
             .route("/health", web::get().to(health_handler))
@@ -271,6 +290,7 @@ async fn main() -> std::io::Result<()> {
                         nonce_tracker_for_middleware.clone(),
                         settlement_queue_for_middleware.clone(),
                         rate_limiter_for_middleware.clone(),
+                        verification_cache_for_middleware.clone(),
                     ))
                     .route("", web::post().to(chat_handler)),
             )
@@ -283,6 +303,7 @@ async fn main() -> std::io::Result<()> {
                         nonce_tracker_for_middleware.clone(),
                         settlement_queue_for_middleware.clone(),
                         rate_limiter_for_middleware.clone(),
+                        verification_cache_for_middleware.clone(),
                     ))
                     .route("/completions", web::post().to(chat_handler)),
             )
