@@ -63,6 +63,10 @@ impl KimiClient {
                 request_body["max_completion_tokens"] = serde_json::Value::Number(max_tokens.into());
                 request_body.as_object_mut().unwrap().remove("max_tokens");
             }
+        } else if self.archetype == "kimi" {
+            // Kimi K2.5 has thinking enabled by default, which is incompatible with
+            // tool_choice: "required". Disable thinking so tool calling works reliably.
+            request_body["thinking"] = serde_json::json!({"type": "disabled"});
         }
 
         // Log the full request being sent to API
