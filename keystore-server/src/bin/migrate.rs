@@ -16,7 +16,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("Running migrations...");
-    let migrator = Migrator::new(Path::new("./migrations")).await?;
+    let mut migrator = Migrator::new(Path::new("./migrations")).await?;
+    migrator.ignore_missing = true;
     migrator.run(&pool).await?;
 
     println!("Migrations completed successfully!");

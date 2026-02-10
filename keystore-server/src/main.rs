@@ -1,7 +1,5 @@
 use axum::{routing::get, routing::post, Router};
-use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_governor::{governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer};
@@ -52,10 +50,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Connected to database");
 
-    // Run migrations at runtime
-    let migrator = Migrator::new(Path::new("./migrations")).await?;
-    migrator.run(&pool).await?;
-    tracing::info!("Migrations completed");
 
     // Create HTTP client for x402 facilitator communication
     let http_client = reqwest::Client::builder()
