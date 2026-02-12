@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::middleware::require_x402_payment;
-use crate::services::{backup::BackupService, session::SessionService};
+use crate::services::{backup::BackupService, erc8128_verify, session::SessionService};
 use crate::AppState;
 
 use super::auth::ErrorResponse;
@@ -34,8 +34,8 @@ pub struct GetKeysResponse {
     pub updated_at: String,
 }
 
-/// Extract wallet_id from session token
-async fn validate_session(
+/// Extract wallet_id from Bearer session token
+async fn validate_session_bearer(
     pool: &sqlx::PgPool,
     headers: &HeaderMap,
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
@@ -77,6 +77,46 @@ async fn validate_session(
         })
 }
 
+/// Extract wallet_id from session token OR ERC-8128 signature.
+async fn validate_session(
+    pool: &sqlx::PgPool,
+    headers: &HeaderMap,
+    method: &str,
+    authority: &str,
+    path: &str,
+    query: Option<&str>,
+    body: &[u8],
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    // Try Bearer session first
+    if let Ok(wallet_id) = validate_session_bearer(pool, headers).await {
+        return Ok(wallet_id);
+    }
+
+    // Fall back to ERC-8128
+    if erc8128_verify::has_erc8128_headers(headers) {
+        let identity = erc8128_verify::verify_erc8128(method, authority, path, query, body, headers)
+            .map_err(|e| {
+                tracing::warn!("ERC-8128 verification failed: {}", e);
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        success: false,
+                        error: format!("ERC-8128 verification failed: {}", e),
+                    }),
+                )
+            })?;
+        return Ok(identity.wallet_address.to_lowercase());
+    }
+
+    Err((
+        StatusCode::UNAUTHORIZED,
+        Json(ErrorResponse {
+            success: false,
+            error: "Missing or invalid Authorization header".to_string(),
+        }),
+    ))
+}
+
 /// Minimum encrypted data size (hex chars) - prevents spam with tiny payloads
 /// 100 bytes = 200 hex chars (ECIES overhead alone is ~113 bytes)
 const MIN_ENCRYPTED_DATA_HEX_LEN: usize = 200;
@@ -86,10 +126,29 @@ const MIN_ENCRYPTED_DATA_HEX_LEN: usize = 200;
 pub async fn store_keys(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<StoreKeysRequest>,
+    body_bytes: axum::body::Bytes,
 ) -> Result<Json<StoreKeysResponse>, axum::response::Response> {
     // Validate session first
-    let wallet_id = validate_session(&state.pool, &headers).await.map_err(|e| e.into_response())?;
+    let authority = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let wallet_id = validate_session(
+        &state.pool, &headers, "POST", authority, "/api/store_keys", None, &body_bytes,
+    )
+    .await
+    .map_err(|e| e.into_response())?;
+
+    let payload: StoreKeysRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                error: format!("Invalid request body: {}", e),
+            }),
+        )
+            .into_response()
+    })?;
 
     // Check for x402 payment if configured (capture tx_hash for audit)
     let payment_tx: Option<String> = if let Some(ref x402_config) = state.config.x402 {
@@ -194,7 +253,14 @@ pub async fn get_keys(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<GetKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let wallet_id = validate_session(&state.pool, &headers).await?;
+    let authority = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let wallet_id = validate_session(
+        &state.pool, &headers, "POST", authority, "/api/get_keys", None, &[],
+    )
+    .await?;
 
     let backup = BackupService::get_by_wallet(&state.pool, &wallet_id)
         .await
@@ -237,7 +303,14 @@ pub async fn delete_keys(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<DeleteKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let wallet_id = validate_session(&state.pool, &headers).await?;
+    let authority = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let wallet_id = validate_session(
+        &state.pool, &headers, "POST", authority, "/api/delete_keys", None, &[],
+    )
+    .await?;
 
     let deleted = BackupService::delete(&state.pool, &wallet_id)
         .await

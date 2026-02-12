@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::middleware::require_x402_payment;
-use crate::services::{identity::IdentityService, session::SessionService};
+use crate::services::{erc8128_verify, identity::IdentityService, session::SessionService};
 use crate::AppState;
 
 use super::auth::ErrorResponse;
@@ -50,8 +50,8 @@ pub struct LogoutResponse {
     pub message: String,
 }
 
-/// Extract wallet_id from session token
-async fn validate_session(
+/// Extract wallet_id from Bearer session token
+async fn validate_session_bearer(
     pool: &sqlx::PgPool,
     headers: &HeaderMap,
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
@@ -93,13 +93,72 @@ async fn validate_session(
         })
 }
 
+/// Extract wallet_id from session token OR ERC-8128 signature.
+async fn validate_session(
+    pool: &sqlx::PgPool,
+    headers: &HeaderMap,
+    method: &str,
+    authority: &str,
+    path: &str,
+    query: Option<&str>,
+    body: &[u8],
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    // Try Bearer session first
+    if let Ok(wallet_id) = validate_session_bearer(pool, headers).await {
+        return Ok(wallet_id);
+    }
+
+    // Fall back to ERC-8128
+    if erc8128_verify::has_erc8128_headers(headers) {
+        let identity = erc8128_verify::verify_erc8128(method, authority, path, query, body, headers)
+            .map_err(|e| {
+                tracing::warn!("ERC-8128 verification failed: {}", e);
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        success: false,
+                        error: format!("ERC-8128 verification failed: {}", e),
+                    }),
+                )
+            })?;
+        return Ok(identity.wallet_address.to_lowercase());
+    }
+
+    Err((
+        StatusCode::UNAUTHORIZED,
+        Json(ErrorResponse {
+            success: false,
+            error: "Missing or invalid Authorization header".to_string(),
+        }),
+    ))
+}
+
 /// POST /api/store_identity - Store identity JSON (authenticated, x402 if configured)
 pub async fn store_identity(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<StoreIdentityRequest>,
+    body_bytes: axum::body::Bytes,
 ) -> Result<Json<StoreIdentityResponse>, axum::response::Response> {
-    let wallet_id = validate_session(&state.pool, &headers).await.map_err(|e| e.into_response())?;
+    let authority = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let wallet_id = validate_session(
+        &state.pool, &headers, "POST", authority, "/api/store_identity", None, &body_bytes,
+    )
+    .await
+    .map_err(|e| e.into_response())?;
+
+    let payload: StoreIdentityRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                success: false,
+                error: format!("Invalid request body: {}", e),
+            }),
+        )
+            .into_response()
+    })?;
 
     // Check for x402 payment if configured
     let payment_tx: Option<String> = if let Some(ref x402_config) = state.config.x402 {
@@ -288,7 +347,14 @@ pub async fn get_identity(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<GetIdentityResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let wallet_id = validate_session(&state.pool, &headers).await?;
+    let authority = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let wallet_id = validate_session(
+        &state.pool, &headers, "POST", authority, "/api/get_identity", None, &[],
+    )
+    .await?;
 
     let identity = IdentityService::get_by_wallet(&state.pool, &wallet_id)
         .await
@@ -329,7 +395,14 @@ pub async fn delete_identity(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<DeleteIdentityResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let wallet_id = validate_session(&state.pool, &headers).await?;
+    let authority = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let wallet_id = validate_session(
+        &state.pool, &headers, "POST", authority, "/api/delete_identity", None, &[],
+    )
+    .await?;
 
     let deleted = IdentityService::delete(&state.pool, &wallet_id)
         .await
