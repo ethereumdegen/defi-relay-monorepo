@@ -6,9 +6,6 @@ pub struct Config {
     pub port: u16,
     pub base_rpc_url: String,
     pub moonshot_api_key: Option<String>,
-    pub minimax_api_key: Option<String>,
-    pub minimax_group_id: Option<String>,
-    pub openai_api_key: Option<String>,
 }
 
 impl Config {
@@ -21,9 +18,6 @@ impl Config {
             base_rpc_url: std::env::var("BASE_RPC_URL")
                 .unwrap_or_else(|_| "https://mainnet.base.org".to_string()),
             moonshot_api_key: std::env::var("MOONSHOT_API_KEY").ok().filter(|s| !s.is_empty()),
-            minimax_api_key: std::env::var("MINIMAX_API_KEY").ok().filter(|s| !s.is_empty()),
-            minimax_group_id: std::env::var("MINIMAX_GROUP_ID").ok().filter(|s| !s.is_empty()),
-            openai_api_key: std::env::var("OPENAI_API_KEY").ok().filter(|s| !s.is_empty()),
         }
     }
 }
