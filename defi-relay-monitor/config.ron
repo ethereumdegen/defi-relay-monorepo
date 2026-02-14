@@ -1,0 +1,8 @@
+(
+    wallets: [
+        (name: "Cloud Income",   address: "0xd8F98Cb5b5234E4b8dDD7eC17E6c600b08a030e0", token: USDC),
+        (name: "Relay Income",   address: "0xb6e3aEB78C17f1DEBceD6d7AEbAb33cBa9744b1F", token: USDC),
+        (name: "Facilitator 1",  address: "0xC65f4323e309D4f1b955E2A90A0B547ABC5A4Cd1", token: ETH),
+        (name: "Facilitator 2",  address: "0x7ed34056de24deed07c2b78712ae491f7072c981", token: ETH),
+    ],
+)
