@@ -3,7 +3,7 @@ use crate::models::{
     PaymentPayload, PaymentRequired, PaymentResponse, VerifyPaymentRequirements,
     usdc_address, BASE_NETWORK,
 };
-use crate::services::{FacilitatorClient, NonceTracker, PendingSettlement, RateLimiter, SettlementQueue};
+use crate::services::{FacilitatorClient, NonceTracker, PendingSettlement, RateLimiter, SettlementQueue, VerificationCache};
 use actix_web::{
     body::EitherBody,
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
@@ -24,6 +24,7 @@ pub struct X402Middleware {
     nonce_tracker: Arc<NonceTracker>,
     settlement_queue: Arc<SettlementQueue>,
     rate_limiter: Arc<RateLimiter>,
+    verification_cache: Arc<VerificationCache>,
 }
 
 impl X402Middleware {
@@ -33,6 +34,7 @@ impl X402Middleware {
         nonce_tracker: Arc<NonceTracker>,
         settlement_queue: Arc<SettlementQueue>,
         rate_limiter: Arc<RateLimiter>,
+        verification_cache: Arc<VerificationCache>,
     ) -> Self {
         X402Middleware {
             config,
@@ -40,6 +42,7 @@ impl X402Middleware {
             nonce_tracker,
             settlement_queue,
             rate_limiter,
+            verification_cache,
         }
     }
 }
@@ -64,6 +67,7 @@ where
             nonce_tracker: self.nonce_tracker.clone(),
             settlement_queue: self.settlement_queue.clone(),
             rate_limiter: self.rate_limiter.clone(),
+            verification_cache: self.verification_cache.clone(),
         }))
     }
 }
@@ -75,6 +79,7 @@ pub struct X402MiddlewareService<S> {
     nonce_tracker: Arc<NonceTracker>,
     settlement_queue: Arc<SettlementQueue>,
     rate_limiter: Arc<RateLimiter>,
+    verification_cache: Arc<VerificationCache>,
 }
 
 impl<S, B> Service<ServiceRequest> for X402MiddlewareService<S>
@@ -96,6 +101,7 @@ where
         let nonce_tracker = self.nonce_tracker.clone();
         let settlement_queue = self.settlement_queue.clone();
         let rate_limiter = self.rate_limiter.clone();
+        let verification_cache = self.verification_cache.clone();
 
         Box::pin(async move {
             // Check for X-PAYMENT header
@@ -193,7 +199,7 @@ where
                         return Ok(req.into_response(response).map_into_right_body());
                     }
 
-                    // Create payment requirements for verification (x402 v2 format)
+                    // Create payment requirements for verification / settlement
                     let payment_requirements = VerifyPaymentRequirements {
                         scheme: "exact".to_string(),
                         network: BASE_NETWORK.to_string(),
@@ -204,50 +210,168 @@ where
                         extra: None,
                     };
 
-                    // Clone payment data for queuing settlement
-                    let payment_payload_for_queue = payment_payload.clone();
-                    let payment_requirements_for_queue = payment_requirements.clone();
+                    // ── Path A: Cache hit — trusted payer, skip verify ──
+                    if verification_cache.is_verified(&payer_address) {
+                        debug!("Cache hit for payer {}, skipping verify", payer_address);
 
-                    // Step 1: Verify with facilitator
-                    let verify_result = facilitator
-                        .verify(payment_payload, payment_requirements)
-                        .await;
+                        let pending_settlement = PendingSettlement::new(
+                            payment_payload,
+                            payment_requirements,
+                            nonce_hex.clone(),
+                        );
+
+                        if let Err(_rejected) = settlement_queue.push(pending_settlement).await {
+                            error!(
+                                "Settlement queue full, rejecting request. Queue size: {}",
+                                settlement_queue.len()
+                            );
+                            let response = HttpResponse::ServiceUnavailable()
+                                .body("Service temporarily unavailable: settlement queue full. Please retry later.");
+                            return Ok(req.into_response(response).map_into_right_body());
+                        }
+
+                        let res = service.call(req).await?;
+
+                        let payment_response = PaymentResponse::success();
+                        let encoded = payment_response.to_base64().unwrap_or_default();
+
+                        let (req, response) = res.into_parts();
+                        let mut response = response.map_into_left_body();
+
+                        if let Ok(header_value) = HeaderValue::from_str(&encoded) {
+                            response.headers_mut().insert(
+                                HeaderName::from_static("payment-response"),
+                                header_value,
+                            );
+                        }
+
+                        return Ok(ServiceResponse::new(req, response));
+                    }
+
+                    // Pre-check queue capacity before doing any expensive work
+                    if settlement_queue.is_full() {
+                        error!(
+                            "Settlement queue full, rejecting request early. Queue size: {}",
+                            settlement_queue.len()
+                        );
+                        let response = HttpResponse::ServiceUnavailable()
+                            .body("Service temporarily unavailable: settlement queue full. Please retry later.");
+                        return Ok(req.into_response(response).map_into_right_body());
+                    }
+
+                    // ── Path B: Recent failure — sequential verify-then-serve ──
+                    // Addresses that previously failed verification are not given
+                    // the parallel path; verify must pass before Kimi is called.
+                    if verification_cache.has_recent_failure(&payer_address) {
+                        debug!("Downgrading payer {} to sequential path (recent failure)", payer_address);
+
+                        let payload_for_settlement = payment_payload.clone();
+                        let requirements_for_settlement = payment_requirements.clone();
+
+                        let verify_result = facilitator
+                            .verify(payment_payload, payment_requirements)
+                            .await;
+
+                        match verify_result {
+                            Ok(verify_response) if verify_response.is_valid => {
+                                info!("Payment verified (sequential) for payer: {:?}", verify_response.payer);
+                                verification_cache.mark_verified(&payer_address);
+
+                                let pending_settlement = PendingSettlement::new(
+                                    payload_for_settlement,
+                                    requirements_for_settlement,
+                                    nonce_hex.clone(),
+                                );
+
+                                if let Err(_rejected) = settlement_queue.push(pending_settlement).await {
+                                    warn!("Settlement not queued for nonce {} due to full queue", nonce_hex);
+                                }
+
+                                let res = service.call(req).await?;
+
+                                let payment_response = PaymentResponse::success();
+                                let encoded = payment_response.to_base64().unwrap_or_default();
+
+                                let (req, response) = res.into_parts();
+                                let mut response = response.map_into_left_body();
+
+                                if let Ok(header_value) = HeaderValue::from_str(&encoded) {
+                                    response.headers_mut().insert(
+                                        HeaderName::from_static("payment-response"),
+                                        header_value,
+                                    );
+                                }
+
+                                return Ok(ServiceResponse::new(req, response));
+                            }
+                            Ok(verify_response) => {
+                                let error_msg = verify_response
+                                    .invalid_reason
+                                    .unwrap_or_else(|| "Payment verification failed".to_string());
+                                warn!("Payment verification failed (sequential): {}", error_msg);
+                                verification_cache.record_failure(&payer_address);
+
+                                let payment_response = PaymentResponse::failure(&error_msg);
+                                let encoded = payment_response.to_base64().unwrap_or_default();
+
+                                let response = HttpResponse::PaymentRequired()
+                                    .insert_header((
+                                        HeaderName::from_static("payment-response"),
+                                        HeaderValue::from_str(&encoded)
+                                            .unwrap_or_else(|_| HeaderValue::from_static("")),
+                                    ))
+                                    .body(format!("Payment verification failed: {}", error_msg));
+
+                                return Ok(req.into_response(response).map_into_right_body());
+                            }
+                            Err(e) => {
+                                error!("Facilitator error (sequential): {}", e);
+                                // Don't record failure for facilitator errors —
+                                // it's not the payer's fault.
+                                let payment_response =
+                                    PaymentResponse::failure("Facilitator unavailable");
+                                let encoded = payment_response.to_base64().unwrap_or_default();
+
+                                let response = HttpResponse::BadGateway()
+                                    .insert_header((
+                                        HeaderName::from_static("payment-response"),
+                                        HeaderValue::from_str(&encoded)
+                                            .unwrap_or_else(|_| HeaderValue::from_static("")),
+                                    ))
+                                    .body(format!("Facilitator error: {}", e));
+
+                                return Ok(req.into_response(response).map_into_right_body());
+                            }
+                        }
+                    }
+
+                    // ── Path C: Clean first-timer — parallel verify + Kimi ──
+                    debug!("Cache miss for payer {}, verifying + calling service in parallel", payer_address);
+
+                    let payload_for_settlement = payment_payload.clone();
+                    let requirements_for_settlement = payment_requirements.clone();
+
+                    let verify_fut = facilitator.verify(payment_payload, payment_requirements);
+                    let service_fut = service.call(req);
+
+                    let (verify_result, service_result) = tokio::join!(verify_fut, service_fut);
 
                     match verify_result {
                         Ok(verify_response) if verify_response.is_valid => {
-                            info!("Payment verified for payer: {:?}", verify_response.payer);
+                            info!("Payment verified (parallel) for payer: {:?}", verify_response.payer);
+                            verification_cache.mark_verified(&payer_address);
 
-                            // Step 2: Queue settlement for background processing
-                            // This decouples settlement from the HTTP request flow
                             let pending_settlement = PendingSettlement::new(
-                                payment_payload_for_queue,
-                                payment_requirements_for_queue,
+                                payload_for_settlement,
+                                requirements_for_settlement,
                                 nonce_hex.clone(),
                             );
 
                             if let Err(_rejected) = settlement_queue.push(pending_settlement).await {
-                                // Queue is full - return 503 Service Unavailable
-                                error!(
-                                    "Settlement queue full, rejecting request. Queue size: {}",
-                                    settlement_queue.len()
-                                );
-
-                                let response = HttpResponse::ServiceUnavailable()
-                                    .body("Service temporarily unavailable: settlement queue full. Please retry later.");
-
-                                return Ok(req.into_response(response).map_into_right_body());
+                                warn!("Settlement not queued for nonce {} due to full queue", nonce_hex);
                             }
 
-                            debug!(
-                                "Settlement queued for nonce {}, queue depth: {}",
-                                nonce_hex,
-                                settlement_queue.len()
-                            );
-
-                            // Step 3: Process the request immediately (settlement happens async)
-                            let res = service.call(req).await?;
-
-                            // Add payment response header to successful response
+                            let res = service_result?;
                             let payment_response = PaymentResponse::success();
                             let encoded = payment_response.to_base64().unwrap_or_default();
 
@@ -264,11 +388,11 @@ where
                             Ok(ServiceResponse::new(req, response))
                         }
                         Ok(verify_response) => {
-                            // Payment invalid
                             let error_msg = verify_response
                                 .invalid_reason
                                 .unwrap_or_else(|| "Payment verification failed".to_string());
-                            warn!("Payment verification failed: {}", error_msg);
+                            warn!("Payment verification failed (parallel): {}", error_msg);
+                            verification_cache.record_failure(&payer_address);
 
                             let payment_response = PaymentResponse::failure(&error_msg);
                             let encoded = payment_response.to_base64().unwrap_or_default();
@@ -281,10 +405,19 @@ where
                                 ))
                                 .body(format!("Payment verification failed: {}", error_msg));
 
-                            Ok(req.into_response(response).map_into_right_body())
+                            match service_result {
+                                Ok(res) => {
+                                    let (req, _) = res.into_parts();
+                                    Ok(ServiceResponse::new(req, response.map_into_right_body()))
+                                }
+                                Err(_) => {
+                                    Err(actix_web::error::ErrorPaymentRequired(error_msg))
+                                }
+                            }
                         }
                         Err(e) => {
-                            error!("Facilitator error: {}", e);
+                            error!("Facilitator error (parallel): {}", e);
+                            // Don't record failure for facilitator errors
                             let payment_response =
                                 PaymentResponse::failure("Facilitator unavailable");
                             let encoded = payment_response.to_base64().unwrap_or_default();
@@ -297,7 +430,15 @@ where
                                 ))
                                 .body(format!("Facilitator error: {}", e));
 
-                            Ok(req.into_response(response).map_into_right_body())
+                            match service_result {
+                                Ok(res) => {
+                                    let (req, _) = res.into_parts();
+                                    Ok(ServiceResponse::new(req, response.map_into_right_body()))
+                                }
+                                Err(_) => {
+                                    Err(actix_web::error::ErrorBadGateway(format!("Facilitator error: {}", e)))
+                                }
+                            }
                         }
                     }
                 }

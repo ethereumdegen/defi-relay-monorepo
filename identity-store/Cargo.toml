@@ -1,12 +1,12 @@
 [package]
-name = "keystore-server"
+name = "identity-store"
 version = "0.1.0"
 edition = "2021"
-description = "Secure encrypted blob storage service with SIWE authentication"
+description = "EIP-8004 agent identity JSON storage with SIWE authentication"
 authors = ["DeFi Relay"]
 
 [[bin]]
-name = "keystore-server"
+name = "identity-store"
 path = "src/main.rs"
 
 [[bin]]

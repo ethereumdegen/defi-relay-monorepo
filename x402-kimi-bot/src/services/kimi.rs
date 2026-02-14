@@ -9,15 +9,18 @@ pub struct KimiClient {
     endpoint: String,
     api_key: String,
     default_model: String,
+    /// "kimi" or "openai" — controls protocol differences
+    archetype: String,
 }
 
 impl KimiClient {
-    pub fn new(endpoint: &str, api_key: &str, default_model: &str) -> Self {
+    pub fn new(endpoint: &str, api_key: &str, default_model: &str, archetype: &str) -> Self {
         KimiClient {
             client: Client::new(),
             endpoint: endpoint.to_string(),
             api_key: api_key.to_string(),
             default_model: default_model.to_string(),
+            archetype: archetype.to_string(),
         }
     }
 
@@ -25,25 +28,48 @@ impl KimiClient {
     pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse, AppError> {
         info!("Sending chat request to Kimi API at: {}", self.endpoint);
 
-        // Use default model if not specified
-        let model = request.model.as_deref().unwrap_or(&self.default_model);
+        // Enforce model: reject requests that specify a different model than configured
+        if let Some(ref requested_model) = request.model {
+            if !requested_model.is_empty() && requested_model != &self.default_model {
+                error!(
+                    "Rejected request with model '{}' — relay is configured for '{}'",
+                    requested_model, self.default_model
+                );
+                return Err(AppError::KimiAgent(format!(
+                    "Model '{}' not available on this relay. Omit the model field to use the default.",
+                    requested_model
+                )));
+            }
+        }
+
         info!(
-            "Request model: {}, messages: {}",
-            model,
+            "Using model: {}, messages: {}",
+            self.default_model,
             request.messages.len()
         );
 
-        // Build request with default model if not specified
+        // Always use the relay's configured model
         let mut request_body = serde_json::to_value(request).map_err(|e| {
             error!("Failed to serialize request: {}", e);
             AppError::KimiAgent(format!("Serialization failed: {}", e))
         })?;
 
-        if request.model.is_none() {
-            request_body["model"] = serde_json::Value::String(self.default_model.clone());
+        request_body["model"] = serde_json::Value::String(self.default_model.clone());
+
+        // Protocol adjustments based on archetype
+        if self.archetype == "openai" {
+            // OpenAI uses max_completion_tokens instead of max_tokens
+            if let Some(max_tokens) = request_body.get("max_tokens").and_then(|v| v.as_u64()) {
+                request_body["max_completion_tokens"] = serde_json::Value::Number(max_tokens.into());
+                request_body.as_object_mut().unwrap().remove("max_tokens");
+            }
+        } else if self.archetype == "kimi" {
+            // Kimi K2.5 has thinking enabled by default, which is incompatible with
+            // tool_choice: "required". Disable thinking so tool calling works reliably.
+            request_body["thinking"] = serde_json::json!({"type": "disabled"});
         }
 
-        // Log the full request being sent to Kimi API
+        // Log the full request being sent to API
         info!(
             ">>> KIMI API REQUEST:\n{}",
             serde_json::to_string_pretty(&request_body).unwrap_or_else(|_| format!("{:?}", request_body))

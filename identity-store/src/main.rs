@@ -26,23 +26,19 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load environment variables
     dotenvy::dotenv().ok();
 
-    // Initialize tracing
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "keystore_server=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "identity_store=debug,tower_http=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Load configuration
     let config = Config::from_env();
     let port = config.port;
 
-    // Create database pool
     let pool = PgPoolOptions::new()
         .max_connections(10)
         .connect(&config.database_url)
@@ -50,28 +46,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Connected to database");
 
+    // Migrations are run manually via `cargo run --bin migrate`
 
-    // Create HTTP client for x402 facilitator communication
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .expect("Failed to create HTTP client");
 
-    // Log x402 payment status
     if config.x402.is_some() {
-        tracing::info!("x402 payment enabled for store_keys endpoint");
+        tracing::info!("x402 payment enabled for store_identity endpoint");
     } else {
         tracing::info!("x402 payment disabled (free storage)");
     }
 
-    // Create app state
     let state = AppState {
         pool: pool.clone(),
         config: Arc::new(config.clone()),
         http_client,
     };
 
-    // Setup CORS with configured origins
+    // Setup CORS
     let cors = if config.allowed_origins.iter().any(|o| o == "*") {
         CorsLayer::permissive()
     } else {
@@ -86,16 +80,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .allow_headers(tower_http::cors::Any)
     };
 
-    // Rate limiting configs (per IP) - use SmartIpKeyExtractor for proxy support
-    // Auth: 10 requests per minute
+    // Rate limiting configs (per IP)
     let auth_governor = GovernorConfigBuilder::default()
         .key_extractor(SmartIpKeyExtractor)
-        .per_second(6) // ~10 per minute = 1 every 6 seconds burst
+        .per_second(6)
         .burst_size(10)
         .finish()
         .unwrap();
 
-    // Write: 10 requests per minute
     let write_governor = GovernorConfigBuilder::default()
         .key_extractor(SmartIpKeyExtractor)
         .per_second(6)
@@ -103,15 +95,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finish()
         .unwrap();
 
-    // Read: 30 requests per minute
     let read_governor = GovernorConfigBuilder::default()
         .key_extractor(SmartIpKeyExtractor)
-        .per_second(2) // ~30 per minute
+        .per_second(2)
         .burst_size(30)
         .finish()
         .unwrap();
 
-    // Setup shutdown channel
+    // Shutdown channel
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
     // Spawn cleanup worker
@@ -121,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         services::cleanup::run_cleanup_worker(cleanup_pool, cleanup_shutdown).await;
     });
 
-    // Build router with rate limiting per route group
+    // Auth routes
     let auth_routes = Router::new()
         .route("/api/authorize", post(handlers::auth::authorize))
         .route("/api/authorize/verify", post(handlers::auth::verify))
@@ -129,36 +120,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config: Arc::new(auth_governor),
         });
 
+    // Write routes (authenticated, x402 gated)
     let write_routes = Router::new()
-        .route("/api/store_keys", post(handlers::keys::store_keys))
-        .route("/api/delete_keys", post(handlers::keys::delete_keys))
-        .route("/api/logout", post(handlers::keys::logout))
+        .route("/api/store_identity", post(handlers::identity::store_identity))
+        .route("/api/delete_identity", post(handlers::identity::delete_identity))
+        .route("/api/logout", post(handlers::identity::logout))
         .layer(GovernorLayer {
             config: Arc::new(write_governor),
         });
 
+    // Read routes (authenticated get_identity, public get_identity_by_hash)
     let read_routes = Router::new()
-        .route("/api/get_keys", post(handlers::keys::get_keys))
+        .route("/api/get_identity", post(handlers::identity::get_identity))
+        .route("/api/identity/:hash", get(handlers::identity::get_identity_by_hash))
+        .route("/api/identity/:hash/raw", get(handlers::identity::get_identity_raw))
         .layer(GovernorLayer {
             config: Arc::new(read_governor),
         });
 
     let app = Router::new()
-        // Health check (no rate limit)
         .route("/api/health", get(handlers::health::health_check))
-        // Merge rate-limited routes
         .merge(auth_routes)
         .merge(write_routes)
         .merge(read_routes)
         .with_state(state)
-        // Request body limit: 21MB (encrypted data max is 10MB hex = 20MB chars + JSON overhead)
-        .layer(RequestBodyLimitLayer::new(21 * 1024 * 1024))
+        // 1MB body limit (identity JSON max is 256KB + JSON overhead)
+        .layer(RequestBodyLimitLayer::new(1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .layer(cors);
 
-    // Start server
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-    tracing::info!("Keystore server listening on port {}", port);
+    tracing::info!("Identity store listening on port {}", port);
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(shutdown_tx))
@@ -193,7 +185,6 @@ async fn shutdown_signal(shutdown_tx: broadcast::Sender<()>) {
     tracing::info!("Shutdown signal received, starting graceful shutdown");
     let _ = shutdown_tx.send(());
 
-    // Wait for workers to finish
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     tracing::info!("Shutdown complete");
 }
