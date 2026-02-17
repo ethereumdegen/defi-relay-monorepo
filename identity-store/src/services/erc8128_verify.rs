@@ -7,7 +7,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3::Keccak256;
 
-use axum::http::HeaderMap;
+use actix_web::http::header::HeaderMap;
 
 /// Identity recovered from a verified ERC-8128 signature.
 #[derive(Debug, Clone)]

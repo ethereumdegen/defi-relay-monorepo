@@ -15,11 +15,9 @@ path = "src/bin/migrate.rs"
 
 [dependencies]
 # Web framework
-axum = { version = "0.7", features = ["macros"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace", "limit"] }
-tower_governor = "0.4"
-governor = "0.6"
+actix-web = "4"
+actix-cors = "0.7"
+actix-governor = "0.5"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

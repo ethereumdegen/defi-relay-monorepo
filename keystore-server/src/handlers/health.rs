@@ -1,13 +1,7 @@
-use axum::Json;
-use serde::Serialize;
+use actix_web::HttpResponse;
 
-#[derive(Serialize)]
-pub struct HealthResponse {
-    pub status: String,
-}
-
-pub async fn health_check() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok".to_string(),
-    })
+pub async fn health_check() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok"
+    }))
 }

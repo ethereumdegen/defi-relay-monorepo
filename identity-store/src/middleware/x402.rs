@@ -3,14 +3,11 @@
 //! Provides payment verification and settlement using the x402 protocol.
 //! Uses pay2.defirelay.com as the facilitator.
 
-use axum::{
-    body::Body,
-    http::{header, HeaderMap, StatusCode},
-    response::Response,
-};
+use actix_web::http::{header::HeaderMap, StatusCode};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
 use crate::config::X402Config;
+use crate::error::AppError;
 use crate::models::x402::{
     PaymentRequiredResponse, PaymentRequirements, SettleResponse, VerifyRequest, VerifyResponse,
 };
@@ -48,7 +45,7 @@ pub fn payment_required_response(
     config: &X402Config,
     resource: &str,
     description: &str,
-) -> Response {
+) -> AppError {
     let requirements = build_payment_requirements(config, resource, description);
 
     let response = PaymentRequiredResponse {
@@ -59,11 +56,7 @@ pub fn payment_required_response(
 
     let body = serde_json::to_string(&response).unwrap_or_default();
 
-    Response::builder()
-        .status(StatusCode::PAYMENT_REQUIRED)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body))
-        .unwrap()
+    AppError::PaymentRequired { body }
 }
 
 /// Decode payment header and build verify request
@@ -140,29 +133,24 @@ async fn settle_payment(
 }
 
 /// Error response for payment failures
-fn payment_error_response(status: StatusCode, message: &str) -> Response {
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(
-            serde_json::json!({
-                "success": false,
-                "error": message
-            })
-            .to_string(),
-        ))
-        .unwrap()
+fn payment_error_response(status: StatusCode, message: &str) -> AppError {
+    match status {
+        StatusCode::BAD_REQUEST => AppError::BadRequest(message.to_string()),
+        StatusCode::PAYMENT_REQUIRED => AppError::PaymentError(message.to_string()),
+        StatusCode::BAD_GATEWAY => AppError::BadGateway(message.to_string()),
+        _ => AppError::Internal(message.to_string()),
+    }
 }
 
 /// Require x402 payment - checks header, verifies, and settles synchronously
-/// Returns Ok(Option<tx_hash>) on success, Err(Response) on failure
+/// Returns Ok(Option<tx_hash>) on success, Err(AppError) on failure
 pub async fn require_x402_payment(
     http_client: &reqwest::Client,
     x402_config: &X402Config,
     headers: &HeaderMap,
     resource: &str,
     description: &str,
-) -> Result<Option<String>, Response> {
+) -> Result<Option<String>, AppError> {
     let payment_header = headers.get("X-PAYMENT").and_then(|v| v.to_str().ok());
 
     match payment_header {

@@ -96,6 +96,7 @@ aptos-runtimes = { path = "patches/aptos-runtimes" }
 [workspace]
 members = [
   "crates/x402-axum",
+  "crates/x402-actix",
   "examples/x402-axum-example",
   "crates/x402-reqwest",
   "examples/x402-reqwest-example",

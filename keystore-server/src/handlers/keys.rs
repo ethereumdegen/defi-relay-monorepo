@@ -1,11 +1,7 @@
-use axum::{
-    extract::State,
-    http::{header, HeaderMap, StatusCode},
-    response::IntoResponse,
-    Json,
-};
+use actix_web::{http::header, web, HttpRequest, HttpResponse, ResponseError};
 use serde::{Deserialize, Serialize};
 
+use crate::error::AppError;
 use crate::middleware::require_x402_payment;
 use crate::services::{backup::BackupService, erc8128_verify, session::SessionService};
 use crate::AppState;
@@ -37,19 +33,17 @@ pub struct GetKeysResponse {
 /// Extract wallet_id from Bearer session token
 async fn validate_session_bearer(
     pool: &sqlx::PgPool,
-    headers: &HeaderMap,
-) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
-    let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
+    headers: &actix_web::http::header::HeaderMap,
+) -> Result<String, AppError> {
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok());
 
     let token = match auth_header {
         Some(h) if h.starts_with("Bearer ") => &h[7..],
         _ => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Missing or invalid Authorization header".to_string(),
-                }),
+            return Err(AppError::Unauthorized(
+                "Missing or invalid Authorization header".to_string(),
             ))
         }
     };
@@ -58,35 +52,21 @@ async fn validate_session_bearer(
         .await
         .map_err(|e| {
             tracing::error!("Database error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Invalid or expired token".to_string(),
-                }),
-            )
-        })
+        .ok_or_else(|| AppError::Unauthorized("Invalid or expired token".to_string()))
 }
 
 /// Extract wallet_id from session token OR ERC-8128 signature.
 async fn validate_session(
     pool: &sqlx::PgPool,
-    headers: &HeaderMap,
+    headers: &actix_web::http::header::HeaderMap,
     method: &str,
     authority: &str,
     path: &str,
     query: Option<&str>,
     body: &[u8],
-) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<String, AppError> {
     // Try Bearer session first
     if let Ok(wallet_id) = validate_session_bearer(pool, headers).await {
         return Ok(wallet_id);
@@ -94,26 +74,18 @@ async fn validate_session(
 
     // Fall back to ERC-8128
     if erc8128_verify::has_erc8128_headers(headers) {
-        let identity = erc8128_verify::verify_erc8128(method, authority, path, query, body, headers)
-            .map_err(|e| {
-                tracing::warn!("ERC-8128 verification failed: {}", e);
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(ErrorResponse {
-                        success: false,
-                        error: format!("ERC-8128 verification failed: {}", e),
-                    }),
-                )
-            })?;
+        let identity =
+            erc8128_verify::verify_erc8128(method, authority, path, query, body, headers).map_err(
+                |e| {
+                    tracing::warn!("ERC-8128 verification failed: {}", e);
+                    AppError::Unauthorized(format!("ERC-8128 verification failed: {}", e))
+                },
+            )?;
         return Ok(identity.wallet_address.to_lowercase());
     }
 
-    Err((
-        StatusCode::UNAUTHORIZED,
-        Json(ErrorResponse {
-            success: false,
-            error: "Missing or invalid Authorization header".to_string(),
-        }),
+    Err(AppError::Unauthorized(
+        "Missing or invalid Authorization header".to_string(),
     ))
 }
 
@@ -124,30 +96,45 @@ const MIN_ENCRYPTED_DATA_HEX_LEN: usize = 200;
 /// POST /api/store_keys - Store encrypted backup
 /// Requires x402 payment if configured (X402_WALLET_ADDRESS set)
 pub async fn store_keys(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body_bytes: axum::body::Bytes,
-) -> Result<Json<StoreKeysResponse>, axum::response::Response> {
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    body_bytes: web::Bytes,
+) -> HttpResponse {
+    match store_keys_inner(state, req, body_bytes).await {
+        Ok(resp) => HttpResponse::Ok().json(resp),
+        Err(resp) => resp,
+    }
+}
+
+async fn store_keys_inner(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    body_bytes: web::Bytes,
+) -> Result<StoreKeysResponse, HttpResponse> {
+    let headers = req.headers();
+
     // Validate session first
     let authority = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     let wallet_id = validate_session(
-        &state.pool, &headers, "POST", authority, "/api/store_keys", None, &body_bytes,
+        &state.pool,
+        headers,
+        "POST",
+        authority,
+        "/api/store_keys",
+        None,
+        &body_bytes,
     )
     .await
-    .map_err(|e| e.into_response())?;
+    .map_err(|e| e.error_response())?;
 
     let payload: StoreKeysRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: format!("Invalid request body: {}", e),
-            }),
-        )
-            .into_response()
+        HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: format!("Invalid request body: {}", e),
+        })
     })?;
 
     // Check for x402 payment if configured (capture tx_hash for audit)
@@ -155,38 +142,34 @@ pub async fn store_keys(
         require_x402_payment(
             &state.http_client,
             x402_config,
-            &headers,
+            headers,
             "/api/store_keys",
             "Store encrypted backup to keystore",
         )
-        .await?
+        .await
+        .map_err(|e| e.error_response())?
     } else {
         None
     };
 
     // Validate encrypted_data is not empty (use DELETE endpoint to remove backup)
     if payload.encrypted_data.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: "Cannot store empty data. Use DELETE /api/delete_keys to remove backup.".to_string(),
-            }),
-        ).into_response());
+        return Err(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: "Cannot store empty data. Use DELETE /api/delete_keys to remove backup."
+                .to_string(),
+        }));
     }
 
     // Validate minimum size (prevents spam with tiny payloads)
     if payload.encrypted_data.len() < MIN_ENCRYPTED_DATA_HEX_LEN {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: format!(
-                    "encrypted_data too small (minimum {} bytes)",
-                    MIN_ENCRYPTED_DATA_HEX_LEN / 2
-                ),
-            }),
-        ).into_response());
+        return Err(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: format!(
+                "encrypted_data too small (minimum {} bytes)",
+                MIN_ENCRYPTED_DATA_HEX_LEN / 2
+            ),
+        }));
     }
 
     // Validate encrypted_data format (should be hex)
@@ -195,27 +178,21 @@ pub async fn store_keys(
         .chars()
         .all(|c| c.is_ascii_hexdigit())
     {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: "Invalid encrypted_data format (expected hex string)".to_string(),
-            }),
-        ).into_response());
+        return Err(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: "Invalid encrypted_data format (expected hex string)".to_string(),
+        }));
     }
 
     // Check size limit
     if payload.encrypted_data.len() > state.config.max_encrypted_data_size * 2 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: format!(
-                    "encrypted_data exceeds maximum size of {} bytes",
-                    state.config.max_encrypted_data_size
-                ),
-            }),
-        ).into_response());
+        return Err(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: format!(
+                "encrypted_data exceeds maximum size of {} bytes",
+                state.config.max_encrypted_data_size
+            ),
+        }));
     }
 
     // Validate key_count (ensure non-negative)
@@ -231,34 +208,38 @@ pub async fn store_keys(
     .await
     .map_err(|e| {
         tracing::error!("Failed to store backup: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                success: false,
-                error: "Database error".to_string(),
-            }),
-        ).into_response()
+        HttpResponse::InternalServerError().json(ErrorResponse {
+            success: false,
+            error: "Database error".to_string(),
+        })
     })?;
 
-    Ok(Json(StoreKeysResponse {
+    Ok(StoreKeysResponse {
         success: true,
         message: "Backup stored".to_string(),
         key_count: backup.key_count,
         updated_at: backup.updated_at.to_rfc3339(),
-    }))
+    })
 }
 
 /// POST /api/get_keys - Retrieve encrypted backup
 pub async fn get_keys(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<GetKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> Result<web::Json<GetKeysResponse>, AppError> {
+    let headers = req.headers();
     let authority = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     let wallet_id = validate_session(
-        &state.pool, &headers, "POST", authority, "/api/get_keys", None, &[],
+        &state.pool,
+        headers,
+        "POST",
+        authority,
+        "/api/get_keys",
+        None,
+        &[],
     )
     .await?;
 
@@ -266,25 +247,11 @@ pub async fn get_keys(
         .await
         .map_err(|e| {
             tracing::error!("Database error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "No backup found for this wallet".to_string(),
-                }),
-            )
-        })?;
+        .ok_or_else(|| AppError::NotFound("No backup found for this wallet".to_string()))?;
 
-    Ok(Json(GetKeysResponse {
+    Ok(web::Json(GetKeysResponse {
         success: true,
         encrypted_data: backup.encrypted_data,
         key_count: backup.key_count,
@@ -300,15 +267,22 @@ pub struct DeleteKeysResponse {
 
 /// POST /api/delete_keys - Delete backup (authenticated, free - no x402 payment)
 pub async fn delete_keys(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<DeleteKeysResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> Result<web::Json<DeleteKeysResponse>, AppError> {
+    let headers = req.headers();
     let authority = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     let wallet_id = validate_session(
-        &state.pool, &headers, "POST", authority, "/api/delete_keys", None, &[],
+        &state.pool,
+        headers,
+        "POST",
+        authority,
+        "/api/delete_keys",
+        None,
+        &[],
     )
     .await?;
 
@@ -316,22 +290,16 @@ pub async fn delete_keys(
         .await
         .map_err(|e| {
             tracing::error!("Failed to delete backup: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?;
 
     if deleted {
-        Ok(Json(DeleteKeysResponse {
+        Ok(web::Json(DeleteKeysResponse {
             success: true,
             message: "Backup deleted".to_string(),
         }))
     } else {
-        Ok(Json(DeleteKeysResponse {
+        Ok(web::Json(DeleteKeysResponse {
             success: true,
             message: "No backup found to delete".to_string(),
         }))
@@ -346,21 +314,20 @@ pub struct LogoutResponse {
 
 /// POST /api/logout - Invalidate current session
 pub async fn logout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<LogoutResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> Result<web::Json<LogoutResponse>, AppError> {
+    let headers = req.headers();
     // Extract token from header
-    let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok());
 
     let token = match auth_header {
         Some(h) if h.starts_with("Bearer ") => &h[7..],
         _ => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Missing or invalid Authorization header".to_string(),
-                }),
+            return Err(AppError::Unauthorized(
+                "Missing or invalid Authorization header".to_string(),
             ))
         }
     };
@@ -369,23 +336,17 @@ pub async fn logout(
         .await
         .map_err(|e| {
             tracing::error!("Failed to delete session: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?;
 
     if deleted {
-        Ok(Json(LogoutResponse {
+        Ok(web::Json(LogoutResponse {
             success: true,
             message: "Logged out successfully".to_string(),
         }))
     } else {
         // Token wasn't found, but that's okay - user is effectively logged out
-        Ok(Json(LogoutResponse {
+        Ok(web::Json(LogoutResponse {
             success: true,
             message: "Session already expired or invalid".to_string(),
         }))

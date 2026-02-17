@@ -1,10 +1,11 @@
-use axum::{extract::State, http::StatusCode, Json};
+use actix_web::web;
 use chrono::{Duration, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use siwe::{Message, VerificationOpts};
 use time::OffsetDateTime;
 
+use crate::error::AppError;
 use crate::services::{challenge::ChallengeService, session::SessionService};
 use crate::AppState;
 
@@ -65,18 +66,11 @@ fn chrono_to_time(dt: chrono::DateTime<Utc>) -> OffsetDateTime {
 
 /// POST /api/authorize - Request SIWE challenge
 pub async fn authorize(
-    State(state): State<AppState>,
-    Json(payload): Json<AuthorizeRequest>,
-) -> Result<Json<AuthorizeResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let address = parse_address(&payload.address).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    state: web::Data<AppState>,
+    payload: web::Json<AuthorizeRequest>,
+) -> Result<web::Json<AuthorizeResponse>, AppError> {
+    let address = parse_address(&payload.address)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     let nonce = generate_nonce();
     let now = Utc::now();
@@ -84,25 +78,15 @@ pub async fn authorize(
 
     let domain = state.config.domain.clone().try_into().map_err(|e| {
         tracing::error!("Invalid domain config '{}': {:?}", state.config.domain, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                success: false,
-                error: "Server configuration error".to_string(),
-            }),
-        )
+        AppError::Internal("Server configuration error".to_string())
     })?;
 
-    let uri = format!("https://{}", state.config.domain).parse().map_err(|e| {
-        tracing::error!("Invalid URI from domain '{}': {:?}", state.config.domain, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                success: false,
-                error: "Server configuration error".to_string(),
-            }),
-        )
-    })?;
+    let uri = format!("https://{}", state.config.domain)
+        .parse()
+        .map_err(|e| {
+            tracing::error!("Invalid URI from domain '{}': {:?}", state.config.domain, e);
+            AppError::Internal("Server configuration error".to_string())
+        })?;
 
     let message = Message {
         domain,
@@ -131,16 +115,10 @@ pub async fn authorize(
     .await
     .map_err(|e| {
         tracing::error!("Failed to store challenge: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                success: false,
-                error: "Database error".to_string(),
-            }),
-        )
+        AppError::Internal("Database error".to_string())
     })?;
 
-    Ok(Json(AuthorizeResponse {
+    Ok(web::Json(AuthorizeResponse {
         success: true,
         message: message_string,
         nonce,
@@ -149,17 +127,11 @@ pub async fn authorize(
 
 /// POST /api/authorize/verify - Verify signature and issue token
 pub async fn verify(
-    State(state): State<AppState>,
-    Json(payload): Json<VerifyRequest>,
-) -> Result<Json<VerifyResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state: web::Data<AppState>,
+    payload: web::Json<VerifyRequest>,
+) -> Result<web::Json<VerifyResponse>, AppError> {
     if !is_valid_address(&payload.address) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: "Invalid address format".to_string(),
-            }),
-        ));
+        return Err(AppError::BadRequest("Invalid address format".to_string()));
     }
 
     let wallet_id = payload.address.to_lowercase();
@@ -168,43 +140,19 @@ pub async fn verify(
         .await
         .map_err(|e| {
             tracing::error!("Database error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?
         .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "No pending challenge or expired".to_string(),
-                }),
-            )
+            AppError::Unauthorized("No pending challenge or expired".to_string())
         })?;
 
     let message: Message = challenge.message.parse().map_err(|e| {
         tracing::error!("Failed to parse SIWE message: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                success: false,
-                error: "Invalid stored message".to_string(),
-            }),
-        )
+        AppError::Internal("Invalid stored message".to_string())
     })?;
 
     let signature = hex::decode(payload.signature.trim_start_matches("0x")).map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: "Invalid signature format".to_string(),
-            }),
-        )
+        AppError::BadRequest("Invalid signature format".to_string())
     })?;
 
     let opts = VerificationOpts::default();
@@ -213,26 +161,14 @@ pub async fn verify(
         .await
         .map_err(|e| {
             tracing::warn!("Signature verification failed: {:?}", e);
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Invalid signature".to_string(),
-                }),
-            )
+            AppError::Unauthorized("Invalid signature".to_string())
         })?;
 
     ChallengeService::delete_for_wallet(&state.pool, &wallet_id)
         .await
         .map_err(|e| {
             tracing::error!("Failed to delete challenge: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?;
 
     let token = SessionService::generate_token();
@@ -242,16 +178,10 @@ pub async fn verify(
         .await
         .map_err(|e| {
             tracing::error!("Failed to create session: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?;
 
-    Ok(Json(VerifyResponse {
+    Ok(web::Json(VerifyResponse {
         success: true,
         token,
         expires_at: expires_at.to_rfc3339(),

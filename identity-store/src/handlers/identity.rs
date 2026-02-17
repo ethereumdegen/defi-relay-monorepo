@@ -1,11 +1,7 @@
-use axum::{
-    extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
-    response::IntoResponse,
-    Json,
-};
+use actix_web::{http::header, web, HttpRequest, HttpResponse, ResponseError};
 use serde::{Deserialize, Serialize};
 
+use crate::error::AppError;
 use crate::middleware::require_x402_payment;
 use crate::services::{erc8128_verify, identity::IdentityService, session::SessionService};
 use crate::AppState;
@@ -53,19 +49,17 @@ pub struct LogoutResponse {
 /// Extract wallet_id from Bearer session token
 async fn validate_session_bearer(
     pool: &sqlx::PgPool,
-    headers: &HeaderMap,
-) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
-    let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
+    headers: &actix_web::http::header::HeaderMap,
+) -> Result<String, AppError> {
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok());
 
     let token = match auth_header {
         Some(h) if h.starts_with("Bearer ") => &h[7..],
         _ => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Missing or invalid Authorization header".to_string(),
-                }),
+            return Err(AppError::Unauthorized(
+                "Missing or invalid Authorization header".to_string(),
             ))
         }
     };
@@ -74,35 +68,21 @@ async fn validate_session_bearer(
         .await
         .map_err(|e| {
             tracing::error!("Database error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Invalid or expired token".to_string(),
-                }),
-            )
-        })
+        .ok_or_else(|| AppError::Unauthorized("Invalid or expired token".to_string()))
 }
 
 /// Extract wallet_id from session token OR ERC-8128 signature.
 async fn validate_session(
     pool: &sqlx::PgPool,
-    headers: &HeaderMap,
+    headers: &actix_web::http::header::HeaderMap,
     method: &str,
     authority: &str,
     path: &str,
     query: Option<&str>,
     body: &[u8],
-) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<String, AppError> {
     // Try Bearer session first
     if let Ok(wallet_id) = validate_session_bearer(pool, headers).await {
         return Ok(wallet_id);
@@ -110,54 +90,61 @@ async fn validate_session(
 
     // Fall back to ERC-8128
     if erc8128_verify::has_erc8128_headers(headers) {
-        let identity = erc8128_verify::verify_erc8128(method, authority, path, query, body, headers)
-            .map_err(|e| {
-                tracing::warn!("ERC-8128 verification failed: {}", e);
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(ErrorResponse {
-                        success: false,
-                        error: format!("ERC-8128 verification failed: {}", e),
-                    }),
-                )
-            })?;
+        let identity =
+            erc8128_verify::verify_erc8128(method, authority, path, query, body, headers).map_err(
+                |e| {
+                    tracing::warn!("ERC-8128 verification failed: {}", e);
+                    AppError::Unauthorized(format!("ERC-8128 verification failed: {}", e))
+                },
+            )?;
         return Ok(identity.wallet_address.to_lowercase());
     }
 
-    Err((
-        StatusCode::UNAUTHORIZED,
-        Json(ErrorResponse {
-            success: false,
-            error: "Missing or invalid Authorization header".to_string(),
-        }),
+    Err(AppError::Unauthorized(
+        "Missing or invalid Authorization header".to_string(),
     ))
 }
 
 /// POST /api/store_identity - Store identity JSON (authenticated, x402 if configured)
 pub async fn store_identity(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body_bytes: axum::body::Bytes,
-) -> Result<Json<StoreIdentityResponse>, axum::response::Response> {
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    body_bytes: web::Bytes,
+) -> HttpResponse {
+    match store_identity_inner(state, req, body_bytes).await {
+        Ok(resp) => HttpResponse::Ok().json(resp),
+        Err(resp) => resp,
+    }
+}
+
+async fn store_identity_inner(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    body_bytes: web::Bytes,
+) -> Result<StoreIdentityResponse, HttpResponse> {
+    let headers = req.headers();
+
     let authority = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     let wallet_id = validate_session(
-        &state.pool, &headers, "POST", authority, "/api/store_identity", None, &body_bytes,
+        &state.pool,
+        headers,
+        "POST",
+        authority,
+        "/api/store_identity",
+        None,
+        &body_bytes,
     )
     .await
-    .map_err(|e| e.into_response())?;
+    .map_err(|e| e.error_response())?;
 
     let payload: StoreIdentityRequest = serde_json::from_slice(&body_bytes).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: format!("Invalid request body: {}", e),
-            }),
-        )
-            .into_response()
+        HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: format!("Invalid request body: {}", e),
+        })
     })?;
 
     // Check for x402 payment if configured
@@ -165,49 +152,45 @@ pub async fn store_identity(
         require_x402_payment(
             &state.http_client,
             x402_config,
-            &headers,
+            headers,
             "/api/store_identity",
             "Store agent identity to identity registry",
         )
-        .await?
+        .await
+        .map_err(|e| e.error_response())?
     } else {
         None
     };
 
     // Validate identity_json is not empty
     if payload.identity_json.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: "identity_json cannot be empty".to_string(),
-            }),
-        ).into_response());
+        return Err(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: "identity_json cannot be empty".to_string(),
+        }));
     }
 
     // Validate it's valid JSON
     let parsed: serde_json::Value = serde_json::from_str(&payload.identity_json).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: format!("Invalid JSON: {}", e),
-            }),
-        ).into_response()
+        HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: format!("Invalid JSON: {}", e),
+        })
     })?;
 
     // Re-serialize to canonical form (no extra whitespace, consistent key ordering)
-    let canonical_json = serde_json::to_string(&parsed).unwrap_or_else(|_| payload.identity_json.clone());
+    let canonical_json =
+        serde_json::to_string(&parsed).unwrap_or_else(|_| payload.identity_json.clone());
 
     // Check size limit
     if canonical_json.len() > MAX_IDENTITY_JSON_SIZE {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: format!("identity_json exceeds maximum size of {} bytes", MAX_IDENTITY_JSON_SIZE),
-            }),
-        ).into_response());
+        return Err(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: format!(
+                "identity_json exceeds maximum size of {} bytes",
+                MAX_IDENTITY_JSON_SIZE
+            ),
+        }));
     }
 
     let identity = IdentityService::upsert(
@@ -219,40 +202,33 @@ pub async fn store_identity(
     .await
     .map_err(|e| {
         tracing::error!("Failed to store identity: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                success: false,
-                error: "Database error".to_string(),
-            }),
-        ).into_response()
+        HttpResponse::InternalServerError().json(ErrorResponse {
+            success: false,
+            error: "Database error".to_string(),
+        })
     })?;
 
     let base_url = &state.config.public_url;
     let url = format!("{}/api/identity/{}/raw", base_url, identity.content_hash);
 
-    Ok(Json(StoreIdentityResponse {
+    Ok(StoreIdentityResponse {
         success: true,
         message: "Identity stored".to_string(),
         content_hash: identity.content_hash,
         url,
         updated_at: identity.updated_at.to_rfc3339(),
-    }))
+    })
 }
 
-/// GET /api/identity/:hash - Public: get identity by content hash
+/// GET /api/identity/{hash} - Public: get identity by content hash
 pub async fn get_identity_by_hash(
-    State(state): State<AppState>,
-    Path(hash): Path<String>,
-) -> Result<Json<GetIdentityResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state: web::Data<AppState>,
+    hash: web::Path<String>,
+) -> Result<web::Json<GetIdentityResponse>, AppError> {
     // Validate hash format (64 hex chars)
     if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: "Invalid content hash format".to_string(),
-            }),
+        return Err(AppError::BadRequest(
+            "Invalid content hash format".to_string(),
         ));
     }
 
@@ -260,28 +236,14 @@ pub async fn get_identity_by_hash(
         .await
         .map_err(|e| {
             tracing::error!("Database error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Identity not found".to_string(),
-                }),
-            )
-        })?;
+        .ok_or_else(|| AppError::NotFound("Identity not found".to_string()))?;
 
     let identity_value: serde_json::Value = serde_json::from_str(&identity.identity_json)
         .unwrap_or(serde_json::Value::String(identity.identity_json));
 
-    Ok(Json(GetIdentityResponse {
+    Ok(web::Json(GetIdentityResponse {
         success: true,
         identity_json: identity_value,
         content_hash: identity.content_hash,
@@ -290,25 +252,19 @@ pub async fn get_identity_by_hash(
     }))
 }
 
-/// GET /api/identity/:hash/raw - Public: get raw identity JSON (EIP-8004 compliant)
+/// GET /api/identity/{hash}/raw - Public: get raw identity JSON (EIP-8004 compliant)
 ///
 /// Returns just the identity_json content directly, not wrapped in a response envelope.
 /// This is the endpoint that agentURIs stored on-chain should point to, so any
 /// EIP-8004 client can fetch and parse the RegistrationFile directly.
 pub async fn get_identity_raw(
-    State(state): State<AppState>,
-    Path(hash): Path<String>,
-) -> Result<axum::response::Response, (StatusCode, Json<ErrorResponse>)> {
-    use axum::response::IntoResponse;
-
+    state: web::Data<AppState>,
+    hash: web::Path<String>,
+) -> Result<HttpResponse, AppError> {
     // Validate hash format (64 hex chars)
     if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                success: false,
-                error: "Invalid content hash format".to_string(),
-            }),
+        return Err(AppError::BadRequest(
+            "Invalid content hash format".to_string(),
         ));
     }
 
@@ -316,43 +272,34 @@ pub async fn get_identity_raw(
         .await
         .map_err(|e| {
             tracing::error!("Database error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Identity not found".to_string(),
-                }),
-            )
-        })?;
+        .ok_or_else(|| AppError::NotFound("Identity not found".to_string()))?;
 
     // Return the raw identity JSON directly with application/json content type
-    Ok((
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        identity.identity_json,
-    ).into_response())
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .body(identity.identity_json))
 }
 
 /// POST /api/get_identity - Get your own identity (authenticated)
 pub async fn get_identity(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<GetIdentityResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> Result<web::Json<GetIdentityResponse>, AppError> {
+    let headers = req.headers();
     let authority = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     let wallet_id = validate_session(
-        &state.pool, &headers, "POST", authority, "/api/get_identity", None, &[],
+        &state.pool,
+        headers,
+        "POST",
+        authority,
+        "/api/get_identity",
+        None,
+        &[],
     )
     .await?;
 
@@ -360,28 +307,14 @@ pub async fn get_identity(
         .await
         .map_err(|e| {
             tracing::error!("Database error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "No identity found for this wallet".to_string(),
-                }),
-            )
-        })?;
+        .ok_or_else(|| AppError::NotFound("No identity found for this wallet".to_string()))?;
 
     let identity_value: serde_json::Value = serde_json::from_str(&identity.identity_json)
         .unwrap_or(serde_json::Value::String(identity.identity_json));
 
-    Ok(Json(GetIdentityResponse {
+    Ok(web::Json(GetIdentityResponse {
         success: true,
         identity_json: identity_value,
         content_hash: identity.content_hash,
@@ -392,15 +325,22 @@ pub async fn get_identity(
 
 /// POST /api/delete_identity - Delete your identity (authenticated)
 pub async fn delete_identity(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<DeleteIdentityResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> Result<web::Json<DeleteIdentityResponse>, AppError> {
+    let headers = req.headers();
     let authority = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     let wallet_id = validate_session(
-        &state.pool, &headers, "POST", authority, "/api/delete_identity", None, &[],
+        &state.pool,
+        headers,
+        "POST",
+        authority,
+        "/api/delete_identity",
+        None,
+        &[],
     )
     .await?;
 
@@ -408,22 +348,16 @@ pub async fn delete_identity(
         .await
         .map_err(|e| {
             tracing::error!("Failed to delete identity: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?;
 
     if deleted {
-        Ok(Json(DeleteIdentityResponse {
+        Ok(web::Json(DeleteIdentityResponse {
             success: true,
             message: "Identity deleted".to_string(),
         }))
     } else {
-        Ok(Json(DeleteIdentityResponse {
+        Ok(web::Json(DeleteIdentityResponse {
             success: true,
             message: "No identity found to delete".to_string(),
         }))
@@ -432,20 +366,19 @@ pub async fn delete_identity(
 
 /// POST /api/logout - Invalidate current session
 pub async fn logout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<LogoutResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> Result<web::Json<LogoutResponse>, AppError> {
+    let headers = req.headers();
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok());
 
     let token = match auth_header {
         Some(h) if h.starts_with("Bearer ") => &h[7..],
         _ => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Missing or invalid Authorization header".to_string(),
-                }),
+            return Err(AppError::Unauthorized(
+                "Missing or invalid Authorization header".to_string(),
             ))
         }
     };
@@ -454,22 +387,16 @@ pub async fn logout(
         .await
         .map_err(|e| {
             tracing::error!("Failed to delete session: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    success: false,
-                    error: "Database error".to_string(),
-                }),
-            )
+            AppError::Internal("Database error".to_string())
         })?;
 
     if deleted {
-        Ok(Json(LogoutResponse {
+        Ok(web::Json(LogoutResponse {
             success: true,
             message: "Logged out successfully".to_string(),
         }))
     } else {
-        Ok(Json(LogoutResponse {
+        Ok(web::Json(LogoutResponse {
             success: true,
             message: "Session already expired or invalid".to_string(),
         }))

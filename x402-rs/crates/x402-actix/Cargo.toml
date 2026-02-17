@@ -1,0 +1,39 @@
+[package]
+name = "x402-actix"
+version = "0.8.0"
+edition = "2024"
+description = "Actix-web middleware for enforcing x402 protocol payments on protected routes"
+license = "Apache-2.0"
+authors = ["Sergey Ukustov <sergey@ukstv.me>"]
+repository = "https://github.com/x402-rs/x402-rs"
+homepage = "https://x402.rs"
+documentation = "https://docs.rs/x402-actix"
+keywords = ["actix-web", "middleware", "x402", "payments", "stablecoin"]
+categories = ["web-programming::http-server", "authentication", "cryptography", "finance", "network-programming"]
+readme = "README.md"
+
+[dependencies]
+x402-rs = { version = "0.12", default-features = false }
+url = { version = "2.5", features = ["serde"] }
+serde_json = { version = "1.0" }
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = { version = "2.0" }
+actix-web = { version = "4" }
+http = { version = "0.2" }
+tokio = { version = "1", features = ["sync"] }
+
+# Telemetry
+tracing = { version = "0.1", optional = true }
+
+[dev-dependencies]
+wiremock = "0.5"
+actix-web = { version = "4" }
+actix-rt = "2"
+x402-rs = { version = "0.12", default-features = false, features = ["telemetry"] }
+alloy-primitives = { version = "1.4.1" }
+tokio = { version = "1", features = ["full"] }
+
+[features]
+default = []
+telemetry = ["dep:tracing", "x402-rs/telemetry"]
