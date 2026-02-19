@@ -66,25 +66,37 @@ function GettingStarted() {
         The easiest way to get started is to use our reference implementation.
       </p>
 
-      {/* Reference Implementation Card */}
+      {/* AI Inference Router Card */}
       <div className="rounded-xl bg-gradient-to-r from-relay-500/10 to-purple-500/10 border border-relay-500/30 p-6 mb-8">
         <h2 className="text-xl font-semibold text-white mb-3 flex items-center gap-2">
-          <GitBranch className="w-5 h-5 text-relay-400" />
-          Reference Implementation: x402-llama-bot
+          <Zap className="w-5 h-5 text-relay-400" />
+          AI Inference Router
         </h2>
         <p className="text-slate-300 mb-4">
-          A complete, production-ready example of an x402-enabled service. This bot wraps a Llama AI agent
-          and charges USDC per request. Clone it, swap in your own service, and deploy.
+          DefiRelay's inference router at <code className="bg-slate-800 px-1.5 py-0.5 rounded text-relay-400">inference.defirelay.com</code> provides
+          multi-model AI inference with x402 micropayments. Route requests to the best model, pay per token with USDC on Base.
+          Also available: the <strong className="text-white">x402 Superrouter</strong> for x402-powered image generation.
         </p>
-        <a
-          href="https://github.com/ethereumdegen/defi-relay-monorepo/tree/master/x402-llama-bot"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 px-4 py-2 bg-relay-500 hover:bg-relay-600 text-white rounded-lg transition-colors"
-        >
-          View on GitHub
-          <ExternalLink className="w-4 h-4" />
-        </a>
+        <div className="flex flex-wrap gap-3">
+          <a
+            href="https://inference.defirelay.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-relay-500 hover:bg-relay-600 text-white rounded-lg transition-colors"
+          >
+            Try Inference Router
+            <ExternalLink className="w-4 h-4" />
+          </a>
+          <a
+            href="https://github.com/ethereumdegen/defi-relay-monorepo/tree/master/x402-llama-bot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-colors border border-slate-700"
+          >
+            View Reference Bot on GitHub
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        </div>
       </div>
 
       <h2 className="text-2xl font-semibold text-white mt-10 mb-4">How It Works</h2>
@@ -161,7 +173,7 @@ function BuildYourBot() {
       <h1 className="text-3xl font-bold text-white mb-6">Build Your Own Bot</h1>
 
       <p className="text-slate-300 text-lg mb-8">
-        The x402-llama-bot is a template you can adapt to wrap any service - AI models, APIs, data feeds, or anything else.
+        Use our reference bot as a template to wrap any service with x402 payments - connect to the inference router, build image generation pipelines, monetize APIs, or anything else.
         Here's how to build your own.
       </p>
 
@@ -190,7 +202,7 @@ cd defi-relay-monorepo/x402-llama-bot`}</code>
 │   │   └── x402.rs          # Payment types (reusable!)
 │   ├── services/
 │   │   ├── facilitator.rs   # DefiRelay client (reusable!)
-│   │   ├── llama.rs         # ← REPLACE THIS with your service
+│   │   ├── inference.rs     # ← REPLACE THIS with your service
 │   │   └── nonce_tracker.rs # Replay protection (reusable!)
 │   └── handlers/
 │       └── chat.rs          # ← REPLACE THIS with your handler
@@ -207,7 +219,7 @@ cd defi-relay-monorepo/x402-llama-bot`}</code>
       <h2 className="text-2xl font-semibold text-white mt-10 mb-4">3. Replace the Service</h2>
 
       <p className="text-slate-300 mb-4">
-        The llama-bot wraps a DigitalOcean Llama agent. Replace it with whatever you want to monetize:
+        The reference bot wraps an upstream AI service. Replace it with whatever you want to monetize - connect to inference.defirelay.com, the Superrouter, or your own backend:
       </p>
 
       <div className="rounded-xl bg-slate-900/50 border border-slate-800/50 overflow-hidden mb-6">

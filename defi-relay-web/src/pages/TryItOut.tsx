@@ -7,7 +7,7 @@ import { keccak256, toHex, encodePacked } from 'viem'
 // USDC on Base mainnet
 const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const
 const BASE_CHAIN_ID = 8453
-const LLAMA_BOT_URL = 'https://llama.defirelay.com'
+const INFERENCE_URL = 'https://inference.defirelay.com'
 
 // EIP-3009 domain for USDC on Base
 const domain = {
@@ -71,14 +71,14 @@ export function TryItOut() {
 
       const chatRequest = {
         messages: [...messages, { role: 'user', content: userInput }],
-        model: 'llama-2',
+        model: 'default',
         temperature: 0.7,
         maxTokens: 1000,
         stream: false,
       }
 
       // Initial request to get payment requirements
-      const initialResponse = await fetch(`${LLAMA_BOT_URL}/chat`, {
+      const initialResponse = await fetch(`${INFERENCE_URL}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -169,7 +169,7 @@ export function TryItOut() {
 
       const paymentHeader = btoa(JSON.stringify(paymentPayload))
 
-      const paidResponse = await fetch(`${LLAMA_BOT_URL}/chat`, {
+      const paidResponse = await fetch(`${INFERENCE_URL}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -208,7 +208,7 @@ export function TryItOut() {
           </h1>
           <p className="text-slate-400 text-lg max-w-2xl mx-auto">
             Experience gasless payments with EIP-3009. Connect your wallet and chat with
-            the Llama AI bot - each message is paid for with a signed USDC authorization.
+            the DefiRelay AI inference router - each message is paid for with a signed USDC authorization.
           </p>
         </div>
 
@@ -288,7 +288,7 @@ export function TryItOut() {
           <div className="border-b border-slate-800 p-4">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-5 h-5 text-relay-400" />
-              <h2 className="text-lg font-semibold text-white">Chat with Llama Bot</h2>
+              <h2 className="text-lg font-semibold text-white">Chat with AI Inference Router</h2>
             </div>
           </div>
 

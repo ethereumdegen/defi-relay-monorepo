@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Github } from 'lucide-react'
+import { Github, ExternalLink } from 'lucide-react'
 
 export function Footer() {
   return (
@@ -19,7 +19,7 @@ export function Footer() {
               <span className="text-xl font-semibold text-white">DefiRelay</span>
             </Link>
             <p className="text-slate-400 text-sm max-w-xs">
-              x402 payments facilitator on Base mainnet. Accept crypto payments without managing wallets or gas.
+              x402 payments facilitator & AI inference router on Base mainnet. Powering AI model inference, image generation, and crypto payments.
             </p>
           </div>
 
@@ -27,6 +27,16 @@ export function Footer() {
           <div>
             <h4 className="text-white font-medium mb-4">Product</h4>
             <ul className="space-y-2">
+              <li>
+                <a
+                  href="https://inference.defirelay.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-slate-400 hover:text-white text-sm transition-colors"
+                >
+                  AI Inference Router
+                </a>
+              </li>
               <li>
                 <Link to="/#features" className="text-slate-400 hover:text-white text-sm transition-colors">
                   Features
@@ -47,8 +57,18 @@ export function Footer() {
 
           {/* Resources */}
           <div>
-            <h4 className="text-white font-medium mb-4">Resources</h4>
+            <h4 className="text-white font-medium mb-4">Ecosystem</h4>
             <ul className="space-y-2">
+              <li>
+                <a
+                  href="https://starkbot.ai"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-slate-400 hover:text-white text-sm transition-colors inline-flex items-center gap-1"
+                >
+                  <ExternalLink className="w-3 h-3" /> StarkBot.ai
+                </a>
+              </li>
               <li>
                 <a
                   href="https://github.com/ethereumdegen/defi-relay-monorepo"
@@ -57,6 +77,16 @@ export function Footer() {
                   className="text-slate-400 hover:text-white text-sm transition-colors inline-flex items-center gap-1"
                 >
                   <Github className="w-4 h-4" /> GitHub
+                </a>
+              </li>
+              <li>
+                <a
+                  href="https://x402.org"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-slate-400 hover:text-white text-sm transition-colors"
+                >
+                  x402 Spec
                 </a>
               </li>
             </ul>
@@ -69,6 +99,14 @@ export function Footer() {
           </p>
           <div className="flex items-center gap-2">
             <span className="badge badge-gray">Base Mainnet</span>
+            <a
+              href="https://inference.defirelay.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="badge badge-relay hover:opacity-80 transition-opacity"
+            >
+              AI Inference
+            </a>
             <a
               href="https://github.com/x402-rs/x402-rs"
               target="_blank"

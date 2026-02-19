@@ -130,7 +130,7 @@ export function Code() {
 {'\n'}<span className="text-relay-400">cargo build</span> --release
 {'\n'}
 {'\n'}<span className="text-slate-500"># Configure your .env</span>
-{'\n'}<span className="text-slate-400">AGENT_ENDPOINT</span>=https://llama.defirelay.com/api/v1/chat/completions
+{'\n'}<span className="text-slate-400">AGENT_ENDPOINT</span>=https://inference.defirelay.com/api/v1/chat/completions
 {'\n'}<span className="text-slate-400">ETH_PRIVATE_KEY</span>=0x...
 {'\n'}
 {'\n'}<span className="text-slate-500"># Run</span>

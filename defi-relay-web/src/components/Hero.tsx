@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ArrowRight, Zap } from 'lucide-react'
+import { ArrowRight, Zap, Brain, Image } from 'lucide-react'
 
 export function Hero() {
   return (
@@ -20,6 +20,19 @@ export function Hero() {
             <Zap className="w-3 h-3" />
             x402 v2
           </a>
+          <a
+            href="https://inference.defirelay.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="badge badge-relay hover:opacity-80 transition-opacity"
+          >
+            <Brain className="w-3 h-3" />
+            AI Inference Router
+          </a>
+          <span className="badge badge-gray">
+            <Image className="w-3 h-3" />
+            x402 Superrouter
+          </span>
         </div>
 
         {/* Main headline */}
@@ -28,19 +41,24 @@ export function Hero() {
         </h1>
 
         {/* Tagline */}
-        <p className="text-xl sm:text-2xl text-slate-300 mb-4 max-w-2xl mx-auto">
-          x402 payments facilitator on Base mainnet
+        <p className="text-xl sm:text-2xl text-slate-300 mb-4 max-w-3xl mx-auto">
+          x402 payments facilitator & AI inference router on Base mainnet
+        </p>
+        <p className="text-lg text-slate-400 mb-8 max-w-2xl mx-auto">
+          Pay-per-use AI model inference, image generation, and API monetization - all powered by x402 micropayments.
         </p>
 
         {/* CTAs */}
         <div className="flex flex-col sm:flex-row justify-center gap-4 mb-16">
-          <Link
-            to="/try-it-out"
+          <a
+            href="https://inference.defirelay.com"
+            target="_blank"
+            rel="noopener noreferrer"
             className="group px-8 py-4 rounded-xl bg-relay-500 hover:bg-relay-600 text-white font-semibold text-lg transition-all glow-sm hover:glow inline-flex items-center justify-center gap-2"
           >
-            Try Now
+            Try AI Inference
             <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-          </Link>
+          </a>
           <Link
             to="/docs"
             className="px-8 py-4 rounded-xl bg-slate-800/50 hover:bg-slate-800 text-white font-semibold text-lg transition-all border border-slate-700/50 hover:border-slate-600"
@@ -58,15 +76,18 @@ export function Hero() {
                 <div className="w-3 h-3 rounded-full bg-yellow-500/50"></div>
                 <div className="w-3 h-3 rounded-full bg-green-500/50"></div>
               </div>
-              <span className="text-slate-500 text-xs ml-2">Quick start</span>
+              <span className="text-slate-500 text-xs ml-2">DefiRelay services</span>
             </div>
             <pre className="text-slate-300 overflow-x-auto">
               <code>
                 <span className="text-slate-500"># x402 Payment Facilitator</span>
 {'\n'}<span className="text-relay-400">pay.defirelay.com</span>  <span className="text-slate-500"># Verifies & settles x402 payments</span>
 {'\n'}
-{'\n'}<span className="text-slate-500"># Try it out - Llama AI Agent</span>
-{'\n'}<span className="text-relay-400">llama.defirelay.com</span>  <span className="text-slate-500"># Chat with Llama, pay via x402</span>
+{'\n'}<span className="text-slate-500"># AI Model Inference Router</span>
+{'\n'}<span className="text-relay-400">inference.defirelay.com</span>  <span className="text-slate-500"># Multi-model AI inference, pay via x402</span>
+{'\n'}
+{'\n'}<span className="text-slate-500"># x402 Superrouter - Image Generation</span>
+{'\n'}<span className="text-relay-400">superrouter.defirelay.com</span>  <span className="text-slate-500"># x402-powered image generation</span>
 {'\n'}
 {'\n'}<span className="text-slate-500"># Point your x402 middleware to pay.defirelay.com</span>
 {'\n'}<span className="text-slate-500"># Users sign payments - no gas required</span>
