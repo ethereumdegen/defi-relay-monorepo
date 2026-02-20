@@ -122,7 +122,43 @@ fn alchemy_url_for_network(network: &str, api_key: &str) -> Option<(String, Stri
     Some((name.to_string(), url))
 }
 
-/// Load network RPC endpoints using ALCHEMY_API_KEY.
+/// Public RPC fallback endpoints for each network
+fn public_rpc_fallbacks(network: &str) -> Vec<String> {
+    match network {
+        "mainnet" => vec![
+            "https://eth.llamarpc.com".to_string(),
+            "https://0xrpc.io/eth".to_string(),
+        ],
+        "base" => vec![
+            "https://mainnet.base.org".to_string(),
+            "https://base.llamarpc.com".to_string(),
+        ],
+        "arbitrum" => vec![
+            "https://arb1.arbitrum.io/rpc".to_string(),
+            "https://arbitrum.llamarpc.com".to_string(),
+        ],
+        "optimism" => vec![
+            "https://mainnet.optimism.io".to_string(),
+            "https://optimism.llamarpc.com".to_string(),
+        ],
+        "polygon" => vec![
+            "https://polygon-rpc.com".to_string(),
+            "https://polygon.llamarpc.com".to_string(),
+        ],
+        "sepolia" => vec![
+            "https://rpc.sepolia.org".to_string(),
+        ],
+        "base-sepolia" => vec![
+            "https://sepolia.base.org".to_string(),
+        ],
+        "arbitrum-sepolia" => vec![
+            "https://sepolia-rollup.arbitrum.io/rpc".to_string(),
+        ],
+        _ => vec![],
+    }
+}
+
+/// Load network RPC endpoints using ALCHEMY_API_KEY with public RPC fallbacks.
 /// Automatically registers all supported Alchemy networks.
 pub fn load_networks_from_env() -> NetworkRegistry {
     dotenvy::dotenv().ok();
@@ -131,7 +167,7 @@ pub fn load_networks_from_env() -> NetworkRegistry {
 
     // Check for ALCHEMY_API_KEY first (preferred method)
     if let Ok(api_key) = env::var("ALCHEMY_API_KEY") {
-        tracing::info!("Using ALCHEMY_API_KEY for RPC endpoints");
+        tracing::info!("Using ALCHEMY_API_KEY for RPC endpoints (with public fallbacks)");
 
         let networks = [
             "mainnet",
@@ -145,21 +181,17 @@ pub fn load_networks_from_env() -> NetworkRegistry {
         ];
 
         for network in networks {
-            if let Some((name, url)) = alchemy_url_for_network(network, &api_key) {
-                tracing::info!("Registered network: {} -> https://{}.g.alchemy.com/v2/***", name,
-                    match network {
-                        "mainnet" => "eth-mainnet",
-                        "base" => "base-mainnet",
-                        "arbitrum" => "arb-mainnet",
-                        "optimism" => "opt-mainnet",
-                        "polygon" => "polygon-mainnet",
-                        "sepolia" => "eth-sepolia",
-                        "base-sepolia" => "base-sepolia",
-                        "arbitrum-sepolia" => "arb-sepolia",
-                        _ => "unknown",
-                    }
+            if let Some((name, alchemy_url)) = alchemy_url_for_network(network, &api_key) {
+                let mut endpoints = vec![alchemy_url];
+                let fallbacks = public_rpc_fallbacks(network);
+                let fallback_count = fallbacks.len();
+                endpoints.extend(fallbacks);
+
+                tracing::info!(
+                    "Registered network: {} -> Alchemy + {} public fallback(s)",
+                    name, fallback_count
                 );
-                registry.register(&name, RpcClient::new(&url));
+                registry.register(&name, RpcClient::with_fallbacks(endpoints));
             }
         }
     } else {
@@ -187,8 +219,12 @@ pub fn load_networks_from_env() -> NetworkRegistry {
             let env_var = format!("{}_RPC_URL", network);
             if let Ok(url) = env::var(&env_var) {
                 let network_name = network.to_lowercase().replace('_', "-");
-                tracing::info!("Registered network: {} -> {}", network_name, url);
-                registry.register(&network_name, RpcClient::new(&url));
+                let mut endpoints = vec![url];
+                let fallbacks = public_rpc_fallbacks(&network_name);
+                endpoints.extend(fallbacks);
+
+                tracing::info!("Registered network: {} ({} endpoint(s))", network_name, endpoints.len());
+                registry.register(&network_name, RpcClient::with_fallbacks(endpoints));
             }
         }
 
@@ -200,8 +236,12 @@ pub fn load_networks_from_env() -> NetworkRegistry {
                     .to_lowercase()
                     .replace('_', "-");
                 if registry.get(&network_name).is_none() {
-                    tracing::info!("Registered network: {} -> {}", network_name, value);
-                    registry.register(&network_name, RpcClient::new(&value));
+                    let mut endpoints = vec![value];
+                    let fallbacks = public_rpc_fallbacks(&network_name);
+                    endpoints.extend(fallbacks);
+
+                    tracing::info!("Registered network: {} ({} endpoint(s))", network_name, endpoints.len());
+                    registry.register(&network_name, RpcClient::with_fallbacks(endpoints));
                 }
             }
         }
