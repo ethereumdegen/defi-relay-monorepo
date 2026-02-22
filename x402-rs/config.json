@@ -9,12 +9,7 @@
       "signers": ["$EVM_PRIVATE_KEY"],
       "rpc": [
         {
-          "http": "https://mainnet.base.org",
-          "rate_limit": 50
-        },
-        {
-          "http": "https://base.llamarpc.com",
-          "rate_limit": 50
+          "http": "https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
         }
       ]
     },
@@ -24,12 +19,7 @@
       "signers": ["$EVM_PRIVATE_KEY"],
       "rpc": [
         {
-          "http": "https://eth.llamarpc.com",
-          "rate_limit": 50
-        },
-        {
-          "http": "https://0xrpc.io/eth",
-          "rate_limit": 50
+          "http": "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
         }
       ]
     }
