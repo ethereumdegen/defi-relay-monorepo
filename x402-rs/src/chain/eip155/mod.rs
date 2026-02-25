@@ -352,22 +352,24 @@ impl Eip155ChainProvider {
                 Some(service)
             })
             .collect::<Vec<_>>();
-        let transport_count = transports.len();
-        // Use all transports as active so reads get immediate fallback (if Alchemy 429s,
-        // the public RPC response is returned instead). The FallbackLayer tracks latency +
-        // stability scores and automatically ranks transports, so Alchemy (fastest/most
-        // reliable) naturally stays primary.
+        // Use active_transport_count=1 so only the top-scored transport handles each
+        // request. This prevents parallel fan-out where a slower/stale public RPC can
+        // return a JSON-RPC error (e.g., "execution reverted") faster than Alchemy returns
+        // success, causing spurious failures in eth_estimateGas and settlement.
         //
-        // eth_sendRawTransaction MUST be sequential to prevent parallel broadcast to
-        // multiple RPCs, which causes nonce issues when different nodes have different
-        // mempool views. Sequential tries the top-scored transport first, then falls
-        // back one-by-one on failure.
+        // The FallbackLayer's scoring system (70% stability, 30% latency) automatically
+        // demotes failing transports: if Alchemy 429s or goes down, subsequent requests
+        // route to public fallbacks. The quoter/RPC layer retry logic covers the brief
+        // transition window.
+        //
+        // eth_sendRawTransaction is also marked sequential to prevent parallel broadcast
+        // causing nonce issues across RPCs with different mempool views.
         let fallback = ServiceBuilder::new()
             .layer(
                 FallbackLayer::default()
                     .with_active_transport_count(
-                        NonZeroUsize::new(transport_count)
-                            .expect("Non-zero amount of stateless transports"),
+                        NonZeroUsize::new(1)
+                            .expect("Non-zero"),
                     )
                     .with_sequential_method("eth_sendRawTransaction"),
             )
