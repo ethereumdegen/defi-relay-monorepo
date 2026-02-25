@@ -352,12 +352,24 @@ impl Eip155ChainProvider {
                 Some(service)
             })
             .collect::<Vec<_>>();
+        let transport_count = transports.len();
+        // Use all transports as active so reads get immediate fallback (if Alchemy 429s,
+        // the public RPC response is returned instead). The FallbackLayer tracks latency +
+        // stability scores and automatically ranks transports, so Alchemy (fastest/most
+        // reliable) naturally stays primary.
+        //
+        // eth_sendRawTransaction MUST be sequential to prevent parallel broadcast to
+        // multiple RPCs, which causes nonce issues when different nodes have different
+        // mempool views. Sequential tries the top-scored transport first, then falls
+        // back one-by-one on failure.
         let fallback = ServiceBuilder::new()
             .layer(
-                FallbackLayer::default().with_active_transport_count(
-                    NonZeroUsize::new(transports.len())
-                        .expect("Non-zero amount of stateless transports"),
-                ),
+                FallbackLayer::default()
+                    .with_active_transport_count(
+                        NonZeroUsize::new(transport_count)
+                            .expect("Non-zero amount of stateless transports"),
+                    )
+                    .with_sequential_method("eth_sendRawTransaction"),
             )
             .service(transports);
         RpcClient::new(fallback, false)
